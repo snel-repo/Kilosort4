@@ -1,22 +1,13 @@
+import logging
 import time
 from pathlib import Path
-import logging
+
 logger = logging.getLogger(__name__)
 
 import numpy as np
 import torch
-
-from kilosort import (
-    preprocessing,
-    datashift,
-    template_matching,
-    clustering_qr,
-    clustering_qr,
-    io,
-    spikedetect,
-    CCG,
-    PROBE_DIR
-)
+from kilosort import (CCG, PROBE_DIR, clustering_qr, datashift, io,
+                      preprocessing, spikedetect, template_matching)
 from kilosort.parameters import DEFAULT_SETTINGS
 
 
@@ -399,10 +390,11 @@ def compute_drift_correction(ops, device, tic0=np.nan, progress_bar=None,
     bfile.close()
     logger.info(f'drift computed in {time.time()-tic : .2f}s; ' + 
                 f'total {time.time()-tic0 : .2f}s')
-    logger.debug(f'st shape: {st.shape}')
-    logger.debug(f'yblk shape: {ops["yblk"].shape}')
-    logger.debug(f'dshift shape: {ops["dshift"].shape}')
-    logger.debug(f'iKxx shape: {ops["iKxx"].shape}')
+    if ops['nblocks'] != 0:
+        logger.debug(f'st shape: {st.shape}')
+        logger.debug(f'yblk shape: {ops["yblk"].shape}')
+        logger.debug(f'dshift shape: {ops["dshift"].shape}')
+        logger.debug(f'iKxx shape: {ops["iKxx"].shape}')
     
     # binary file with drift correction
     bfile = io.BinaryFiltered(
