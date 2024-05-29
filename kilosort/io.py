@@ -1,23 +1,23 @@
 import json
-from pathlib import Path
-from typing import Tuple, Union
-import os, shutil
+import logging
+import os
+import shutil
+import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
-import time
-import logging
+from pathlib import Path
+from typing import Tuple, Union
+
 logger = logging.getLogger(__name__)
 
-from scipy.io import loadmat
 import numpy as np
 import torch
-from torch.fft import fft, ifft, fftshift
-
 from kilosort import CCG
-from kilosort.preprocessing import get_drift_matrix, fft_highpass
-from kilosort.postprocessing import (
-    remove_duplicates, compute_spike_positions, make_pc_features
-    )
+from kilosort.postprocessing import (compute_spike_positions, make_pc_features,
+                                     remove_duplicates)
+from kilosort.preprocessing import fft_highpass, get_drift_matrix
+from scipy.io import loadmat
+from torch.fft import fft, fftshift, ifft
 
 _torch_warning = ".*PyTorch does not support non-writable tensors"
 
@@ -516,9 +516,9 @@ class BinaryRWFile:
             # Casting to uint64 is to prevent overflow for long recordings.
             # It's done multiple times because python is stubborn about
             # switching things back to default types.
-            ibatch = np.uint64(ibatch)
-            bstart = np.uint64(self.imin + (ibatch * self.NT) - self.nt)
-            bend = min(self.imax, np.uint64(bstart + self.NT + 2*self.nt))
+            ibatch = np.uint32(ibatch)
+            bstart = np.uint32(self.imin + (ibatch * self.NT) - self.nt)
+            bend = min(self.imax, np.uint32(bstart + self.NT + 2*self.nt))
         data = self.file[bstart : bend]
         data = data.T
         # Shift data to +/- 2**15
@@ -955,7 +955,6 @@ class RecordingExtractorAsArray:
         # Index into actual channel ids from recording, which do not have to 
         # be sequential or start from 0
         channel_ids = self.recording.channel_ids[channel_ids]
-
         samples = self.recording.get_traces(start_frame=i, end_frame=j,
                                             channel_ids=channel_ids)
         

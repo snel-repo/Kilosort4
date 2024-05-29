@@ -1,15 +1,16 @@
-from io import StringIO
 import logging
+import warnings
+from io import StringIO
+
 logger = logging.getLogger(__name__)
 
-from torch.nn.functional import max_pool2d, avg_pool2d, conv1d, max_pool1d
 import numpy as np
 import torch
+from kilosort.utils import template_path
 from sklearn.cluster import KMeans
 from sklearn.decomposition import TruncatedSVD
+from torch.nn.functional import avg_pool2d, conv1d, max_pool1d, max_pool2d
 from tqdm import tqdm
-
-from kilosort.utils import template_path
 
 device = torch.device('cuda')
 
@@ -54,7 +55,6 @@ def extract_wPCA_wTEMP(ops, bfile, nt=61, twav_min=20, Th_single_ch=6, nskip=25,
     i = 0
     for j in range(0, bfile.n_batches, nskip):
         X = bfile.padded_batch_to_torch(j, ops)
-        
         clips_new = extract_snippets(X, nt=nt, twav_min=twav_min,
                                      Th_single_ch=Th_single_ch, device=device)
 
@@ -188,7 +188,7 @@ def run(ops, bfile, device=torch.device('cuda'), progress_bar=None):
         # Determine templates and PC features from data.
         ops['wPCA'], ops['wTEMP'] = extract_wPCA_wTEMP(
             ops, bfile, nt=ops['nt'], twav_min=ops['nt0min'], 
-            Th_single_ch=ops['settings']['Th_single_ch'], nskip=25,
+            Th_single_ch=ops['settings']['Th_single_ch'], nskip=ops['settings']['nskip'],
             device=device
             )
     else:
