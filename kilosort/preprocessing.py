@@ -1,9 +1,13 @@
-import torch, os, scipy
-import numpy as np
-from scipy.signal import butter, filtfilt
-from scipy.interpolate import interp1d
+import os
 from glob import glob
-from torch.fft import fft, ifft, fftshift
+
+import numpy as np
+import scipy
+import torch
+from scipy.interpolate import interp1d
+from scipy.signal import butter, filtfilt
+from torch.fft import fft, fftshift, ifft
+
 
 def whitening_from_covariance(CC):
     """ whitening matrix for a covariance matrix CC
@@ -116,6 +120,69 @@ def get_whitening_matrix(f, xc, yc, nskip=25, nrange=32):
     Wrot = whitening_local(CC, xc, yc, nrange=nrange, device=f.device)
 
     return Wrot
+
+def get_channel_delays(f, fs=30000, nskip=25, device=torch.device('cuda')):
+    """ get the delays for each channel based on maximizing cross-correlation across channels
+        using the channel as the reference which produces the highest total cross-correlation
+        with all other channels
+    """
+    n_chan = len(f.chan_map)
+
+    print('Getting channel delays... ')
+    max_lag = int(fs // 500)  # 2 ms max time shift
+    # shift_dt = 1/30  # ms
+    # shift_samples = int(shift_dt * fs / 1000)  # samples
+    shift_samples = 1
+    lag_range = range(-max_lag, max_lag+1, shift_samples)
+
+    # Initialize the cross-correlation matrix for each time delay
+    CC = torch.zeros((n_chan, n_chan, len(lag_range)), dtype=torch.float32, device=device)
+
+    k = 0
+    for j in range(0, f.n_batches-1, nskip):
+        # load data with high-pass filtering (see the Binary file class)
+        X = f.padded_batch_to_torch(j)
+
+        # remove padding
+        X = X[:, f.nt:-f.nt] # dimension: (n_chan, n_time)
+
+        # Compute the cross-correlation matrix for each time shift
+        for i, iShift in enumerate(lag_range):
+            # Roll the batch to create time shifts
+            X_shifted = torch.roll(X, shifts=iShift, dims=1)
+
+            # Compute the cross-correlation matrix for the current shift
+            batch_CC = torch.matmul(X_shifted, X.T) / X.shape[1]
+
+            # Accumulate the cross-correlation matrix for the current shift
+            CC[:, :, i] += batch_CC.squeeze()
+
+        k += 1
+
+    # Average the cross-correlation matrix over all batches
+    CC /= k
+
+    # Find the peak cross-correlation for each channel and time delay
+    peak_vals, peak_locs = CC.max(dim=2)
+    peak_locs = peak_locs - max_lag  # Adjust peak locations to be relative to zero-lag
+
+    # Find the channel with the maximum peak value
+    best_chan = peak_vals.sum(dim=0).argmax()
+    chan_delays = peak_locs[best_chan]
+    
+    # print("Cross-correlation matrix computed for all channel combinations: ")
+    # print(peak_vals.cpu().numpy())
+    # print("+________________________________________________________")
+    print("Sums of cross-correlation matrix computed for all channels: ")
+    print(peak_vals.sum(dim=0).cpu().numpy())
+
+    print("Delays for best correlation computed for all channel combinations: ")
+    print(peak_locs.cpu().numpy())
+
+    print(f"Using channel delays with best reference channel: {best_chan}")
+    print(chan_delays.cpu().numpy())
+
+    return chan_delays
 
 def get_highpass_filter(fs = 30000, device=torch.device('cuda')):
     """ filter to use for high-pass filtering. 

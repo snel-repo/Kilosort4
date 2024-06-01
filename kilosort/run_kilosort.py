@@ -324,6 +324,9 @@ def compute_preprocessing(ops, device, tic0=np.nan, file_object=None):
                               file_object=file_object)
     whiten_mat = preprocessing.get_whitening_matrix(bfile, xc, yc, nskip=nskip,
                                                     nrange=whitening_range)
+    
+    chan_delays = preprocessing.get_channel_delays(bfile, fs=fs, nskip=nskip,
+                                                      device=device)
 
     bfile.close()
 
@@ -331,6 +334,7 @@ def compute_preprocessing(ops, device, tic0=np.nan, file_object=None):
     ops['Nbatches'] = bfile.n_batches
     ops['preprocessing'] = {}
     ops['preprocessing']['whiten_mat'] = whiten_mat
+    ops['preprocessing']['chan_delays'] = chan_delays
     ops['preprocessing']['hp_filter'] = hp_filter
     ops['Wrot'] = whiten_mat
     ops['fwav'] = hp_filter
@@ -339,6 +343,7 @@ def compute_preprocessing(ops, device, tic0=np.nan, file_object=None):
                 f'total {time.time()-tic0 : .2f}s')
     logger.debug(f'hp_filter shape: {hp_filter.shape}')
     logger.debug(f'whiten_mat shape: {whiten_mat.shape}')
+    logger.debug(f'channel_delays shape: {chan_delays.shape}')
 
     return ops
 
@@ -378,11 +383,12 @@ def compute_drift_correction(ops, device, tic0=np.nan, progress_bar=None,
         _, _, tmin, tmax, artifact = get_run_parameters(ops)
     hp_filter = ops['preprocessing']['hp_filter']
     whiten_mat = ops['preprocessing']['whiten_mat']
+    chan_delays = ops['preprocessing']['chan_delays']
 
     bfile = io.BinaryFiltered(
         ops['filename'], n_chan_bin, fs, NT, nt, twav_min, chan_map, 
-        hp_filter=hp_filter, whiten_mat=whiten_mat, device=device, do_CAR=do_CAR,
-        invert_sign=invert, dtype=dtype, tmin=tmin, tmax=tmax,
+        hp_filter=hp_filter, whiten_mat=whiten_mat, chan_delays=chan_delays, device=device,
+        do_CAR=do_CAR, invert_sign=invert, dtype=dtype, tmin=tmin, tmax=tmax,
         artifact_threshold=artifact, file_object=file_object
         )
 

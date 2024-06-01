@@ -653,8 +653,8 @@ class BinaryFiltered(BinaryRWFile):
     def __init__(self, filename: str, n_chan_bin: int, fs: int = 30000, 
                  NT: int = 60000, nt: int = 61, nt0min: int = 20,
                  chan_map: np.ndarray = None, hp_filter: torch.Tensor = None,
-                 whiten_mat: torch.Tensor = None, dshift: torch.Tensor = None,
-                 device: torch.device = None, do_CAR: bool = True,
+                 whiten_mat: torch.Tensor = None, chan_delays: torch.Tensor = None,
+                 dshift: torch.Tensor = None, device: torch.device = None, do_CAR: bool = True,
                  artifact_threshold: float = np.inf, invert_sign: bool = False,
                  dtype=None, tmin: float = 0.0, tmax: float = np.inf, file_object=None):
 
@@ -662,6 +662,7 @@ class BinaryFiltered(BinaryRWFile):
                          dtype=dtype, tmin=tmin, tmax=tmax, file_object=file_object) 
         self.chan_map = chan_map
         self.whiten_mat = whiten_mat
+        self.chan_delays = chan_delays
         self.hp_filter = hp_filter
         self.dshift = dshift
         self.do_CAR = do_CAR
@@ -701,6 +702,9 @@ class BinaryFiltered(BinaryRWFile):
                 X = (M @ self.whiten_mat) @ X
             else:
                 X = self.whiten_mat @ X
+        if self.chan_delays is not None:
+            X = torch.roll(X, self.chan_delays, dims=0)
+            print(f"applied delays {self.chan_delays} to batch {ibatch}")
         return X
 
     def __getitem__(self, *items):
