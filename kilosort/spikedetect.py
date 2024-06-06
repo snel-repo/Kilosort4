@@ -1,14 +1,18 @@
 import logging
 import warnings
 from io import StringIO
+from pdb import set_trace
 
 logger = logging.getLogger(__name__)
 
 import numpy as np
 import torch
 from kilosort.utils import template_path
-from sklearn.cluster import KMeans
+from scipy.cluster.hierarchy import fcluster, linkage
+from scipy.spatial.distance import pdist
+from sklearn.cluster import AgglomerativeClustering, KMeans, SpectralClustering
 from sklearn.decomposition import TruncatedSVD
+from sklearn.mixture import BayesianGaussianMixture, GaussianMixture
 from torch.nn.functional import avg_pool2d, conv1d, max_pool1d, max_pool2d
 from tqdm import tqdm
 
@@ -32,20 +36,34 @@ def my_sum2d(X, dt):
 
 def extract_snippets(X, nt, twav_min, Th_single_ch, loc_range=[4,5],
                      long_range=[6,30], device=torch.device('cuda')):
-    Xabs   = X.abs()
-    Xmax   = my_max2d(Xabs, loc_range)
-    ispeak = torch.logical_and(Xmax==Xabs, Xabs > Th_single_ch).float()
+    if isinstance(Th_single_ch, int):
+        Th_list = []
+        Th_list.append(Th_single_ch)
+    elif isinstance(Th_single_ch, list) or isinstance(Th_single_ch, torch.Tensor) or isinstance(Th_single_ch, np.ndarray):
+        Th_list = Th_single_ch
+    else:
+        raise ValueError('Th_single_ch must be either int or iterable')
+    for iTh in Th_list:
+        Xabs   = X.abs()
+        Xmax   = my_max2d(Xabs, loc_range)
+        ispeak = torch.logical_and(Xmax==Xabs, Xabs > iTh).float()
 
-    ispeak_sum  = my_sum2d(ispeak, long_range)
-    is_peak_iso = ((ispeak_sum==1) * (ispeak==1))
+        ispeak_sum  = my_sum2d(ispeak, long_range)
+        is_peak_iso = ((ispeak_sum==1) * (ispeak==1))
 
-    is_peak_iso[:, :nt] = 0
-    is_peak_iso[:, -nt:] = 0
-
-    xy = is_peak_iso.nonzero()
-
+        is_peak_iso[:, :nt] = 0
+        is_peak_iso[:, -nt:] = 0
+        xy = is_peak_iso.nonzero()
+        # accumulate all the peaks across thresholds in Th_list
+        xy_all = xy if iTh == Th_list[0] else torch.cat((xy_all, xy), 0)
+    # if xy_all[:,1] column has any duplicates,
+    # remove xy_all[d,:] where d are the indices of duplicates
+    xy = xy_all[torch.unique(xy_all[:,1], return_inverse=True)[1].unique()]
+    num_duplicates = xy_all.shape[0] - xy.shape[0]
+    if num_duplicates > 0:
+        print(f"Removed {num_duplicates} duplicate peaks")
+        
     clips = X[xy[:,:1], xy[:,1:2] - twav_min + torch.arange(nt, device=device)]
-
     return clips
 
 def extract_wPCA_wTEMP(ops, bfile, nt=61, twav_min=20, Th_single_ch=6, nskip=25,
@@ -56,7 +74,7 @@ def extract_wPCA_wTEMP(ops, bfile, nt=61, twav_min=20, Th_single_ch=6, nskip=25,
     for j in range(0, bfile.n_batches, nskip):
         X = bfile.padded_batch_to_torch(j, ops)
         clips_new = extract_snippets(X, nt=nt, twav_min=twav_min,
-                                     Th_single_ch=Th_single_ch, device=device)
+                                     Th_single_ch=Th_single_ch, device=device,long_range=[6, nt//2])
 
         nnew = len(clips_new)
 
@@ -68,14 +86,41 @@ def extract_wPCA_wTEMP(ops, bfile, nt=61, twav_min=20, Th_single_ch=6, nskip=25,
 
     clips = clips[:i]
     clips /= (clips**2).sum(1, keepdims=True)**.5
-
+    print(f"Identified {clips.shape[0]} unique peaks as single channel templates")
     model = TruncatedSVD(n_components=ops['settings']['n_pcs']).fit(clips)
     wPCA = torch.from_numpy(model.components_).to(device).float()
 
-    model = KMeans(n_clusters=ops['settings']['n_templates'], n_init = 10).fit(clips)
-    wTEMP = torch.from_numpy(model.cluster_centers_).to(device).float()
-    wTEMP = wTEMP / (wTEMP**2).sum(1).unsqueeze(1)**.5
+    ## KMeans clustering
+    # model = KMeans(n_clusters=ops['settings']['n_templates'], n_init = 10).fit(clips)
+    # wTEMP = model.cluster_centers_
+    ## Spectral clustering
+    # model = SpectralClustering(n_clusters=ops['settings']['n_templates'], n_init=10).fit(clips)
+    # # get exemplars from the cluster centers
+    # wTEMP = np.zeros((ops['settings']['n_templates'], nt), 'float32')
+    # for i in range(ops['settings']['n_templates']):
+    #     wTEMP[i] = clips[model.labels_ == i].mean(0)    
+    ## Gaussian Mixture Model clustering
+    # model = GaussianMixture(n_components=ops['settings']['n_templates'], n_init=10, init_params='kmeans',).fit(clips)
+    # wTEMP = model.means_
+    ## Bayesian Gaussian Mixture Model clustering, allow it to choose the number of components
+    model = BayesianGaussianMixture(n_components=ops['settings']['n_templates'], n_init=10, init_params='kmeans',).fit(clips)
+    wTEMP = model.means_
+    ## Heirarchical clustering with ward linkage
+    # model = AgglomerativeClustering(n_clusters=ops['settings']['n_templates'], metric='euclidean', linkage='ward').fit(clips)
+    # wTEMP = np.zeros((ops['settings']['n_templates'], nt), 'float32')
+    # for i in range(ops['settings']['n_templates']):
+    #     wTEMP[i] = clips[model.labels_ == i].mean(0)
 
+    # Compute linkage matrix
+    Z = linkage(pdist(wTEMP, metric='euclidean'), method='ward')
+    labels = fcluster(Z, t=ops['settings']['n_templates'], criterion='maxclust')
+    # Reorder the templates based on the linkage matrix,
+    wTEMP_order = np.argsort(labels)
+    # now reorder the templates based on the order
+    wTEMP = wTEMP[wTEMP_order]
+    # now normalize the templates
+    wTEMP = torch.from_numpy(wTEMP).to(device).float()
+    wTEMP = wTEMP / (wTEMP**2).sum(1).unsqueeze(1)**.5
     return wPCA, wTEMP
 
 def get_waves(ops, device=torch.device('cuda')):
@@ -191,6 +236,16 @@ def run(ops, bfile, device=torch.device('cuda'), progress_bar=None):
             Th_single_ch=ops['settings']['Th_single_ch'], nskip=ops['settings']['nskip'],
             device=device
             )
+        # plot these to show the templates in different rows using plotly
+        import plotly.graph_objects as go
+        import plotly.io as pio
+        from plotly.subplots import make_subplots
+        pio.renderers.default = 'browser'
+        fig = make_subplots(rows=ops['settings']['n_templates'], cols=1, shared_xaxes='all', shared_yaxes='all')
+        for i in range(ops['settings']['n_templates']):
+            fig.add_trace(go.Scatter(y=ops['wTEMP'][i].cpu().numpy(), mode='lines'), row=i+1, col=1)
+        fig.show()
+        # import pdb; pdb.set_trace()
     else:
         logger.info('Using built-in universal templates.')
         # Use pre-computed templates.

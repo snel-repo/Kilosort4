@@ -1,6 +1,5 @@
 import numpy as np
 
-
 # Format for parameter specification:
 # parameter: {
 #     'gui_name': text displayed next to edit box in GUI
@@ -170,6 +169,17 @@ EXTRA_PARAMETERS = {
             estimation, for x,y,time axes in units of registration blocks
             (for x,y axes) and batch size (for time axis). The x,y smoothing has
             no effect for `nblocks = 1`.
+            """
+    },
+    
+    'remove_chan_delays': {
+        'gui_name': 'remove channel delays', 'type': bool, 'min': None, 'max': None,
+        'exclude': [], 'default': False, 'step': 'preprocessing',
+        'description':
+            """
+            If True, will remove channel delays from the data. This is useful
+            for intramuscualr EMG recordings, where delays between motor unit
+            action potentials can be significant and affect spike sorting.
             """
     },
 

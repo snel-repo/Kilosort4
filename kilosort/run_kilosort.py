@@ -324,19 +324,21 @@ def compute_preprocessing(ops, device, tic0=np.nan, file_object=None):
                               file_object=file_object)
     whiten_mat = preprocessing.get_whitening_matrix(bfile, xc, yc, nskip=nskip,
                                                     nrange=whitening_range)
-    
-    chan_delays = preprocessing.get_channel_delays(bfile, fs=fs, nskip=nskip,
+    if ops['remove_chan_delays']:
+        chan_delays = preprocessing.get_channel_delays(bfile, fs=fs, nskip=nskip,
                                                       device=device)
+    else:
+        chan_delays = torch.zeros(n_chan_bin, dtype=torch.float32, device=device)
 
     bfile.close()
 
     # Save results
     ops['Nbatches'] = bfile.n_batches
     ops['preprocessing'] = {}
-    ops['preprocessing']['whiten_mat'] = whiten_mat
+    ops['preprocessing']['whiten_mat'] = whiten_mat # None to disable
     ops['preprocessing']['chan_delays'] = chan_delays
     ops['preprocessing']['hp_filter'] = hp_filter
-    ops['Wrot'] = whiten_mat
+    ops['Wrot'] = ops['preprocessing']['whiten_mat'] # why is this duplicated?
     ops['fwav'] = hp_filter
 
     logger.info(f'Preprocessing filters computed in {time.time()-tic : .2f}s; ' +
@@ -405,7 +407,7 @@ def compute_drift_correction(ops, device, tic0=np.nan, progress_bar=None,
     # binary file with drift correction
     bfile = io.BinaryFiltered(
         ops['filename'], n_chan_bin, fs, NT, nt, twav_min, chan_map, 
-        hp_filter=hp_filter, whiten_mat=whiten_mat, device=device,
+        hp_filter=hp_filter, whiten_mat=whiten_mat, chan_delays=chan_delays, device=device,
         dshift=ops['dshift'], do_CAR=do_CAR, dtype=dtype, tmin=tmin, tmax=tmax,
         artifact_threshold=artifact, file_object=file_object
         )

@@ -143,18 +143,27 @@ def get_channel_delays(f, fs=30000, nskip=25, device=torch.device('cuda')):
         # load data with high-pass filtering (see the Binary file class)
         X = f.padded_batch_to_torch(j)
 
-        # remove padding
+        # Scale the data to have unit variance along each channel
+        X = X / X.std(dim=1, keepdim=True)
+        
+        # take the absolute value of the data to prevent destructive interference
+        X = torch.abs(X)
+        
+        # remove padding once after cloning for
+        X_padded = X.clone()
         X = X[:, f.nt:-f.nt] # dimension: (n_chan, n_time)
-
         # Compute the cross-correlation matrix for each time shift
         for i, iShift in enumerate(lag_range):
             # Roll the batch to create time shifts
-            X_shifted = torch.roll(X, shifts=iShift, dims=1)
+            X_shifted = torch.roll(X_padded, shifts=iShift, dims=1)
+            
+            # remove padding after shifting
+            X_shifted = X_shifted[:, f.nt:-f.nt] 
 
             # Compute the cross-correlation matrix for the current shift
             batch_CC = torch.matmul(X_shifted, X.T) / X.shape[1]
 
-            # Accumulate the cross-correlation matrix for the current shift
+            # Accumulate the cross-correlation matrix for the current shift across all batches
             CC[:, :, i] += batch_CC.squeeze()
 
         k += 1

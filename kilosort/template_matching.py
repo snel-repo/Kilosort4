@@ -1,10 +1,12 @@
-from io import StringIO
 import time
+from io import StringIO
+
 import numpy as np
-from kilosort import spikedetect, preprocessing, CCG
-import torch 
-from torch.nn.functional import conv1d, max_pool2d, max_pool1d
+import torch
+from kilosort import CCG, preprocessing, spikedetect
+from torch.nn.functional import conv1d, max_pool1d, max_pool2d
 from tqdm import tqdm
+
 
 def prepare_extract(ops, U, nC, device=torch.device('cuda')):
     ds = (ops['xc'] - ops['xc'][:, np.newaxis])**2 +  (ops['yc'] - ops['yc'][:, np.newaxis])**2 

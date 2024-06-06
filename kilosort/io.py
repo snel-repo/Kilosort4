@@ -703,8 +703,23 @@ class BinaryFiltered(BinaryRWFile):
             else:
                 X = self.whiten_mat @ X
         if self.chan_delays is not None:
-            X = torch.roll(X, self.chan_delays, dims=0)
-            print(f"applied delays {self.chan_delays} to batch {ibatch}")
+            # use plotly to plot the batch before and after delays are applied
+            # with each channel in a different row. Ensure the x-axes are shared across all subplots.
+            # import plotly.graph_objects as go
+            # import plotly.io as pio
+            # from plotly.subplots import make_subplots
+            # pio.renderers.default = 'browser'
+            # fig = make_subplots(rows=X.shape[0], cols=2, shared_xaxes='all', shared_yaxes='all')
+            # for i in range(X.shape[0]):
+            #     fig.add_trace(go.Scatter(y=X[i].cpu().numpy(), mode='lines'), row=i+1, col=1)
+            # apply a delay to each channel by rolling 
+            for i, iRoll in enumerate(self.chan_delays):
+                X[i] = torch.roll(X[i], -int(iRoll))
+            
+            # print(f"substracted delays {self.chan_delays} in batch {ibatch}")
+            # for i in range(X.shape[0]):
+            #     fig.add_trace(go.Scatter(y=X[i].cpu().numpy(), mode='lines'), row=i+1, col=2)
+            # fig.show()
         return X
 
     def __getitem__(self, *items):
