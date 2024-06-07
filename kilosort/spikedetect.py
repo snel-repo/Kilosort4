@@ -272,14 +272,14 @@ def run(ops, bfile, device=torch.device('cuda'), progress_bar=None):
             device=device
             )
         # plot these to show the templates in different rows using plotly
-        import plotly.graph_objects as go
-        import plotly.io as pio
-        from plotly.subplots import make_subplots
-        pio.renderers.default = 'browser'
-        fig = make_subplots(rows=ops['settings']['n_templates'], cols=1, shared_xaxes='all', shared_yaxes='all')
-        for i in range(ops['settings']['n_templates']):
-            fig.add_trace(go.Scatter(y=ops['wTEMP'][i].cpu().numpy(), mode='lines'), row=i+1, col=1)
-        fig.show()
+        # import plotly.graph_objects as go
+        # import plotly.io as pio
+        # from plotly.subplots import make_subplots
+        # pio.renderers.default = 'browser'
+        # fig = make_subplots(rows=ops['settings']['n_templates'], cols=1, shared_xaxes='all', shared_yaxes='all')
+        # for i in range(ops['settings']['n_templates']):
+        #     fig.add_trace(go.Scatter(y=ops['wTEMP'][i].cpu().numpy(), mode='lines'), row=i+1, col=1)
+        # fig.show()
         # import pdb; pdb.set_trace()
     else:
         logger.info('Using built-in universal templates.')
