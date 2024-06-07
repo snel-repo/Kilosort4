@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from kilosort.utils import template_path
 from scipy.cluster.hierarchy import fcluster, linkage
+from scipy.signal.windows import tukey
 from scipy.spatial.distance import pdist
 from sklearn.cluster import AgglomerativeClustering, KMeans, SpectralClustering
 from sklearn.decomposition import TruncatedSVD
@@ -39,7 +40,11 @@ def extract_snippets(X, nt, twav_min, Th_single_ch, loc_range=[4,5],
     if isinstance(Th_single_ch, int):
         Th_list = []
         Th_list.append(Th_single_ch)
-    elif isinstance(Th_single_ch, list) or isinstance(Th_single_ch, torch.Tensor) or isinstance(Th_single_ch, np.ndarray):
+    elif (
+        isinstance(Th_single_ch, list) or
+        isinstance(Th_single_ch, torch.Tensor) or
+        isinstance(Th_single_ch, np.ndarray)
+        ):
         Th_list = Th_single_ch
     else:
         raise ValueError('Th_single_ch must be either int or iterable')
@@ -86,10 +91,26 @@ def extract_wPCA_wTEMP(ops, bfile, nt=61, twav_min=20, Th_single_ch=6, nskip=25,
 
     clips = clips[:i]
     clips /= (clips**2).sum(1, keepdims=True)**.5
-    print(f"Identified {clips.shape[0]} unique peaks as single channel templates")
-    model = TruncatedSVD(n_components=ops['settings']['n_pcs']).fit(clips)
-    wPCA = torch.from_numpy(model.components_).to(device).float()
+    # pass all clips through a tukey window, padded with zeros so the actual tukey is centered
+    # and has 10% of the length of the clip on either side as zeros
+    percent_tukey_coverage = 0.8
+    tukey_window = tukey(np.ceil(clips.shape[1] * percent_tukey_coverage).astype(int), alpha=0.5)
+    zeros_for_padding = np.zeros(clips.shape[1])
+    # place the tukey window in the center of the zeros by slicing and overwriting
+    pad_start = (1 - percent_tukey_coverage)/2
+    pad_start_idx = int(pad_start * clips.shape[1])
+    pad_end_idx = pad_start_idx + len(tukey_window)
+    zeros_for_padding[pad_start_idx:pad_end_idx] = tukey_window
+    padded_tukey = zeros_for_padding
+    windowed_clips = clips * padded_tukey
 
+    print(f"Identified {clips.shape[0]} unique peaks as single channel templates")
+    model = TruncatedSVD(n_components=ops['settings']['n_pcs']).fit(windowed_clips)
+    # wPCA = torch.from_numpy(model.components_).to(device).float()
+    wPCA = model.components_
+    # project the clips onto the PCs
+    clips_PCA = clips @ wPCA.T # clips is nclips x nt, and dimensions of wPCA are n_pcs x nt, so clips_PCA is nclips x n_pcs
+    ### now cluster the clips_PCA
     ## KMeans clustering
     # model = KMeans(n_clusters=ops['settings']['n_templates'], n_init = 10).fit(clips)
     # wTEMP = model.cluster_centers_
@@ -103,8 +124,22 @@ def extract_wPCA_wTEMP(ops, bfile, nt=61, twav_min=20, Th_single_ch=6, nskip=25,
     # model = GaussianMixture(n_components=ops['settings']['n_templates'], n_init=10, init_params='kmeans',).fit(clips)
     # wTEMP = model.means_
     ## Bayesian Gaussian Mixture Model clustering, allow it to choose the number of components
-    model = BayesianGaussianMixture(n_components=ops['settings']['n_templates'], n_init=10, init_params='kmeans',).fit(clips)
-    wTEMP = model.means_
+    model = GaussianMixture(
+        n_components=ops['settings']['n_templates'], n_init=10, init_params='kmeans',
+        ).fit(clips_PCA)
+    # wTEMP = model.means_
+    wTEMP = model.means_ @ wPCA # project the cluster centers back to the original space
+    # for each cluster, extract the points that have probabilities above 99%, and we will use those to create a new PCA model later
+    for i in range(ops['settings']['n_templates']):
+        cluster_probs = model.predict_proba(clips_PCA)[:, i]
+        cluster_points = clips[cluster_probs > 0.99]
+        if i == 0:
+            cluster_points_all = cluster_points
+        else:
+            cluster_points_all = np.concatenate((cluster_points_all, cluster_points), axis=0)
+    print(f"Keeping {cluster_points_all.shape[0]} spike examples for PCA")
+    model = TruncatedSVD(n_components=ops['settings']['n_pcs']).fit(cluster_points_all)
+    wPCA = torch.from_numpy(model.components_).to(device).float()
     ## Heirarchical clustering with ward linkage
     # model = AgglomerativeClustering(n_clusters=ops['settings']['n_templates'], metric='euclidean', linkage='ward').fit(clips)
     # wTEMP = np.zeros((ops['settings']['n_templates'], nt), 'float32')
@@ -120,7 +155,7 @@ def extract_wPCA_wTEMP(ops, bfile, nt=61, twav_min=20, Th_single_ch=6, nskip=25,
     wTEMP = wTEMP[wTEMP_order]
     # now normalize the templates
     wTEMP = torch.from_numpy(wTEMP).to(device).float()
-    wTEMP = wTEMP / (wTEMP**2).sum(1).unsqueeze(1)**.5
+    # wTEMP = wTEMP / (wTEMP**2).sum(1).unsqueeze(1)**.5
     return wPCA, wTEMP
 
 def get_waves(ops, device=torch.device('cuda')):
