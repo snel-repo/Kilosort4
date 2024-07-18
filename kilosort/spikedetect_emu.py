@@ -9,10 +9,8 @@ from kilosort.utils import template_path
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.signal.windows import tukey
 from scipy.spatial.distance import pdist
-
-# from sklearn.cluster import AgglomerativeClustering, KMeans, SpectralClustering
 from sklearn.decomposition import TruncatedSVD
-from sklearn.mixture import GaussianMixture  # , BayesianGaussianMixture
+from sklearn.mixture import GaussianMixture
 from torch.nn.functional import avg_pool2d, conv1d, max_pool1d, max_pool2d
 from tqdm import tqdm
 
@@ -140,26 +138,14 @@ def extract_wPCA_wTEMP(
     clips_PCA = (
         clips @ wPCA.T
     )  # clips is nclips x nt, and dimensions of wPCA are n_pcs x nt, so clips_PCA is nclips x n_pcs
-    ### now cluster the clips_PCA
-    ## KMeans clustering
-    # model = KMeans(n_clusters=ops['settings']['n_templates'], n_init = 10).fit(clips)
-    # wTEMP = model.cluster_centers_
-    ## Spectral clustering
-    # model = SpectralClustering(n_clusters=ops['settings']['n_templates'], n_init=10).fit(clips)
-    # # get exemplars from the cluster centers
-    # wTEMP = np.zeros((ops['settings']['n_templates'], nt), 'float32')
-    # for i in range(ops['settings']['n_templates']):
-    #     wTEMP[i] = clips[model.labels_ == i].mean(0)
-    ## Gaussian Mixture Model clustering
-    # model = GaussianMixture(n_components=ops['settings']['n_templates'], n_init=10, init_params='kmeans',).fit(clips)
-    # wTEMP = model.means_
-    ## Bayesian Gaussian Mixture Model clustering, allow it to choose the number of components
+
+    # now cluster the clips_PCA using a Gaussian Mixture Model
     model = GaussianMixture(
         n_components=ops["settings"]["n_templates"],
         n_init=10,
         init_params="kmeans",
     ).fit(clips_PCA)
-    # wTEMP = model.means_
+
     wTEMP = (
         model.means_ @ wPCA
     )  # project the cluster centers back to the original space
@@ -176,11 +162,6 @@ def extract_wPCA_wTEMP(
     print(f"Keeping {cluster_points_all.shape[0]} spike examples for PCA")
     model = TruncatedSVD(n_components=ops["settings"]["n_pcs"]).fit(cluster_points_all)
     wPCA = torch.from_numpy(model.components_).to(device).float()
-    ## Heirarchical clustering with ward linkage
-    # model = AgglomerativeClustering(n_clusters=ops['settings']['n_templates'], metric='euclidean', linkage='ward').fit(clips)
-    # wTEMP = np.zeros((ops['settings']['n_templates'], nt), 'float32')
-    # for i in range(ops['settings']['n_templates']):
-    #     wTEMP[i] = clips[model.labels_ == i].mean(0)
 
     # Compute linkage matrix
     Z = linkage(pdist(wTEMP, metric="euclidean"), method="ward")
@@ -191,7 +172,7 @@ def extract_wPCA_wTEMP(
     wTEMP = wTEMP[wTEMP_order]
     # now normalize the templates
     wTEMP = torch.from_numpy(wTEMP).to(device).float()
-    # wTEMP = wTEMP / (wTEMP**2).sum(1).unsqueeze(1)**.5
+    wTEMP = wTEMP / (wTEMP**2).sum(1).unsqueeze(1) ** 0.5
     return wPCA, wTEMP
 
 
@@ -203,23 +184,30 @@ def get_waves(ops, device=torch.device("cuda")):
 
 
 def template_centers(ops):
-    xmin, xmax, ymin, ymax = (
-        ops["xc"].min(),
-        ops["xc"].max(),
-        ops["yc"].min(),
-        ops["yc"].max(),
-    )
-
+    shank_idx = ops["kcoords"]
+    xc = ops["xc"]
+    yc = ops["yc"]
     dmin = ops["settings"]["dmin"]
     if dmin is None:
         # Try to determine a good value automatically based on contact positions.
-        dmin = np.median(np.diff(np.unique(ops["yc"])))
+        dmin = np.median(np.diff(np.unique(yc)))
     ops["dmin"] = dmin
-    ops["yup"] = np.arange(ymin, ymax + 0.00001, dmin / 2)
-
     ops["dminx"] = dminx = ops["settings"]["dminx"]
-    nx = np.round((xmax - xmin) / (dminx / 2)) + 1
-    ops["xup"] = np.linspace(xmin, xmax, int(nx))
+
+    # Iteratively determine template placement for each shank separately.
+    yup = np.array([])
+    xup = np.array([])
+    for i in np.unique(shank_idx):
+        xc_i = xc[shank_idx == i]
+        yc_i = yc[shank_idx == i]
+        xmin, xmax, ymin, ymax = xc_i.min(), xc_i.max(), yc_i.min(), yc_i.max()
+
+        yup = np.concatenate([yup, np.arange(ymin, ymax + 0.00001, dmin / 2)])
+        nx = np.round((xmax - xmin) / (dminx / 2)) + 1
+        xup = np.concatenate([xup, np.linspace(xmin, xmax, int(nx))])
+
+    ops["yup"] = yup
+    ops["xup"] = xup
 
     # Set max channel distance based on dmin, dminx, use whichever is greater.
     if ops.get("max_channel_distance", None) is None:
