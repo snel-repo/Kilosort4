@@ -10,10 +10,8 @@ from torch.fft import fft, fftshift, ifft
 
 
 def whitening_from_covariance(CC):
-    """Whitening matrix for a covariance matrix CC.
-
-    This is the so-called ZCA whitening matrix.
-
+    """ whitening matrix for a covariance matrix CC
+        this is the so-called ZCA whitening matrix
     """
     E,D,V =  torch.linalg.svd(CC)
     eps = 1e-6
@@ -21,7 +19,8 @@ def whitening_from_covariance(CC):
     return Wrot
 
 def whitening_local(CC, xc, yc, nrange=32, device=torch.device('cuda')):
-    """Compute whitening filter for each channel based on nearest channels."""
+    """ loop through each channel and compute its whitening filter based on nearest channels
+    """
     Nchan = CC.shape[0]
     Wrot = torch.zeros((Nchan,Nchan), device = device)
 
@@ -39,14 +38,16 @@ def whitening_local(CC, xc, yc, nrange=32, device=torch.device('cuda')):
     return Wrot
 
 def kernel2D_torch(x, y, sig = 1):
-    """Simple Gaussian kernel for two sets of coordinates x and y."""
+    """ simple Gaussian kernel for two sets of coordinates x and y
+    """
     ds = ((x.unsqueeze(1) - y)**2).sum(-1)
     Kn = torch.exp(-ds / (2*sig**2))
     return Kn
 
 
 def get_drift_matrix(ops, dshift, device=torch.device('cuda')):
-    """For given dshift drift, compute linear drift matrix for interpolation."""
+    """ for a given dshift drift, computes the linear drift matrix for interpolation
+    """
 
     # first, interpolate drifts to every channel
     yblk = ops['yblk']
@@ -74,11 +75,8 @@ def get_drift_matrix(ops, dshift, device=torch.device('cuda')):
 
 
 def get_fwav(NT = 30122, fs = 30000, device=torch.device('cuda')):
-    """Precomputes a filter to use for high-pass filtering.
-    
-    To be used with fft in pytorch. Currently depends on NT,
-    but it could get padded for larger NT.
-
+    """ precomputes a filter to use for high-pass filtering, to be used with fft in pytorch. 
+    Currently depends on NT, but it could get padded for larger NT. 
     """
 
     # a butterworth filter is specified in scipy
@@ -98,7 +96,8 @@ def get_fwav(NT = 30122, fs = 30000, device=torch.device('cuda')):
     return fwav
 
 def get_whitening_matrix(f, xc, yc, nskip=25, nrange=32):
-    """Get the whitening matrix, use every nskip batches."""
+    """ get the whitening matrix, use every nskip batches
+    """
     n_chan = len(f.chan_map)
     # collect the covariance matrix across channels
     CC = torch.zeros((n_chan, n_chan), device=f.device)
@@ -194,12 +193,13 @@ def get_channel_delays(f, fs=30000, nskip=25, device=torch.device('cuda')):
 
     return chan_delays
 
-def get_highpass_filter(fs=30000, cutoff=300, device=torch.device('cuda')):
-    """Filter to use for high-pass filtering."""
+def get_highpass_filter(fs = 30000, device=torch.device('cuda')):
+    """ filter to use for high-pass filtering. 
+    """
     NT = 30122
     
     # a butterworth filter is specified in scipy
-    b,a = butter(3, cutoff, fs=fs, btype='high')
+    b,a = butter(3, 300, fs = fs, btype = 'high')
 
     # a signal with a single entry is used to compute the impulse response
     x = np.zeros(NT)
@@ -212,7 +212,7 @@ def get_highpass_filter(fs=30000, cutoff=300, device=torch.device('cuda')):
     return hp_filter
 
 def fft_highpass(hp_filter, NT=30122):
-    """Convert filter to fourier domain."""
+    """ convert filter to fourier domain"""
     device = hp_filter.device
     ft = hp_filter.shape[0]
 

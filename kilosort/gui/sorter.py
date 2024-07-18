@@ -1,5 +1,4 @@
 import time
-import pprint
 import logging
 logger = logging.getLogger(__name__)
 
@@ -8,13 +7,10 @@ import torch
 from qtpy import QtCore
 
 #from kilosort.gui.logger import setup_logger
-import kilosort
 from kilosort.run_kilosort import (
     setup_logger, initialize_ops, compute_preprocessing, compute_drift_correction,
     detect_spikes, cluster_spikes, save_sorting
     )
-
-from kilosort.io import save_preprocessing
 
 #logger = setup_logger(__name__)
 
@@ -49,91 +45,54 @@ class KiloSortWorker(QtCore.QThread):
             
             setup_logger(results_dir)
 
-            try:
-                logger.info(f"Kilosort version {kilosort.__version__}")
-                logger.info(f"Sorting {self.data_path}")
-                logger.info('-'*40)
+            tic0 = time.time()
 
-                tic0 = time.time()
+            # TODO: make these options in GUI
+            do_CAR=True
+            invert_sign=False
+        
+            if not do_CAR:
+                print("Skipping common average reference.")
 
-                # TODO: make these options in GUI
-                do_CAR=True
-                invert_sign=False
+            if settings['nt0min'] is None:
+                settings['nt0min'] = int(20 * settings['nt']/61)
+            data_dtype = settings['data_dtype']
+            device = self.device
 
-                if not do_CAR:
-                    logger.info("Skipping common average reference.")
+            ops = initialize_ops(settings, probe, data_dtype, do_CAR,
+                                 invert_sign, device)
 
-                if probe['chanMap'].max() >= settings['n_chan_bin']:
-                    raise ValueError(
-                        f'Largest value of chanMap exceeds channel count of data, '
-                        'make sure chanMap is 0-indexed.'
-                    )
+            # TODO: add support for file object through data conversion
+            # Set preprocessing and drift correction parameters
+            ops = compute_preprocessing(ops, self.device, tic0=tic0,
+                                        file_object=self.file_object)
+            np.random.seed(1)
+            torch.cuda.manual_seed_all(1)
+            torch.random.manual_seed(1)
+            ops, bfile, st0 = compute_drift_correction(
+                ops, self.device, tic0=tic0, progress_bar=self.progress_bar,
+                file_object=self.file_object
+                )
 
-                if settings['nt0min'] is None:
-                    settings['nt0min'] = int(20 * settings['nt']/61)
-                data_dtype = settings['data_dtype']
-                device = self.device
-                save_preprocessed_copy = settings['save_preprocessed_copy']
+            # Will be None if nblocks = 0 (no drift correction)
+            if st0 is not None:
+                self.dshift = ops['dshift']
+                self.st0 = st0
+                self.plotDataReady.emit('drift')
 
-                ops = initialize_ops(settings, probe, data_dtype, do_CAR,
-                                    invert_sign, device, save_preprocessed_copy)
-                # Remove some stuff that doesn't need to be printed twice,
-                # then pretty-print format for log file.
-                ops_copy = ops.copy()
-                _ = ops_copy.pop('settings')
-                _ = ops_copy.pop('probe')
-                print_ops = pprint.pformat(ops_copy, indent=4, sort_dicts=False)
-                logger.debug(f"Initial ops:\n{print_ops}\n")
+            # Sort spikes and save results
+            st, tF, Wall0, clu0 = detect_spikes(ops, self.device, bfile, tic0=tic0,
+                                                progress_bar=self.progress_bar)
 
-                # TODO: add support for file object through data conversion
-                # Set preprocessing and drift correction parameters
-                ops = compute_preprocessing(ops, self.device, tic0=tic0,
-                                            file_object=self.file_object)
-                np.random.seed(1)
-                torch.cuda.manual_seed_all(1)
-                torch.random.manual_seed(1)
-                ops, bfile, st0 = compute_drift_correction(
-                    ops, self.device, tic0=tic0, progress_bar=self.progress_bar,
-                    file_object=self.file_object
-                    )
+            self.Wall0 = Wall0
+            self.wPCA = torch.clone(ops['wPCA'].cpu()).numpy()
+            self.clu0 = clu0
+            self.plotDataReady.emit('diagnostics')
 
-                # Check scale of data for log file
-                b1 = bfile.padded_batch_to_torch(0).cpu().numpy()
-                logger.debug(f"First batch min, max: {b1.min(), b1.max()}")
-
-                if save_preprocessed_copy:
-                    save_preprocessing(results_dir / 'temp_wh.dat', ops, bfile)
-
-                # Will be None if nblocks = 0 (no drift correction)
-                if st0 is not None:
-                    self.dshift = ops['dshift']
-                    self.st0 = st0
-                    self.plotDataReady.emit('drift')
-
-                # Sort spikes and save results
-                st, tF, Wall0, clu0 = detect_spikes(
-                    ops, self.device, bfile, tic0=tic0,
-                    progress_bar=self.progress_bar
-                    )
-
-                self.Wall0 = Wall0
-                self.wPCA = torch.clone(ops['wPCA'].cpu()).numpy()
-                self.clu0 = clu0
-                self.plotDataReady.emit('diagnostics')
-
-                clu, Wall = cluster_spikes(
-                    st, tF, ops, self.device, bfile, tic0=tic0,
-                    progress_bar=self.progress_bar
-                    )
-                ops, similar_templates, is_ref, est_contam_rate, kept_spikes = \
-                    save_sorting(ops, results_dir, st, clu, tF, Wall, bfile.imin, tic0)
-
-            except:
-                # This makes sure the full traceback is written to log file.
-                logger.exception('Encountered error in `run_kilosort`:')
-                # Annoyingly, this will print the error message twice for console
-                # but I haven't found a good way around that.
-                raise
+            clu, Wall = cluster_spikes(st, tF, ops, self.device, bfile, tic0=tic0,
+                                       progress_bar=self.progress_bar)
+            ops, similar_templates, is_ref, est_contam_rate, kept_spikes = \
+                save_sorting(ops, results_dir, st, clu, tF, Wall, bfile.imin, tic0)
 
             self.ops = ops
             self.st = st[kept_spikes]

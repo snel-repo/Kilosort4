@@ -1,20 +1,20 @@
-from io import StringIO
 import logging
+from io import StringIO
 
 logger = logging.getLogger(__name__)
 
 import numpy as np
 import torch
+from kilosort.utils import template_path
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.signal.windows import tukey
 from scipy.spatial.distance import pdist
 
+# from sklearn.cluster import AgglomerativeClustering, KMeans, SpectralClustering
 from sklearn.decomposition import TruncatedSVD
-from sklearn.mixture import GaussianMixture
+from sklearn.mixture import GaussianMixture  # , BayesianGaussianMixture
 from torch.nn.functional import avg_pool2d, conv1d, max_pool1d, max_pool2d
 from tqdm import tqdm
-
-from kilosort.utils import template_path
 
 device = torch.device("cuda")
 
@@ -49,7 +49,6 @@ def extract_snippets(
     long_range=[6, 30],
     device=torch.device("cuda"),
 ):
-    ## add multi-threshold support for EMUsort
     if isinstance(Th_single_ch, int):
         Th_list = []
         Th_list.append(Th_single_ch)
@@ -177,6 +176,11 @@ def extract_wPCA_wTEMP(
     print(f"Keeping {cluster_points_all.shape[0]} spike examples for PCA")
     model = TruncatedSVD(n_components=ops["settings"]["n_pcs"]).fit(cluster_points_all)
     wPCA = torch.from_numpy(model.components_).to(device).float()
+    ## Heirarchical clustering with ward linkage
+    # model = AgglomerativeClustering(n_clusters=ops['settings']['n_templates'], metric='euclidean', linkage='ward').fit(clips)
+    # wTEMP = np.zeros((ops['settings']['n_templates'], nt), 'float32')
+    # for i in range(ops['settings']['n_templates']):
+    #     wTEMP[i] = clips[model.labels_ == i].mean(0)
 
     # Compute linkage matrix
     Z = linkage(pdist(wTEMP, metric="euclidean"), method="ward")
@@ -187,7 +191,7 @@ def extract_wPCA_wTEMP(
     wTEMP = wTEMP[wTEMP_order]
     # now normalize the templates
     wTEMP = torch.from_numpy(wTEMP).to(device).float()
-    wTEMP = wTEMP / (wTEMP**2).sum(1).unsqueeze(1) ** 0.5
+    # wTEMP = wTEMP / (wTEMP**2).sum(1).unsqueeze(1)**.5
     return wPCA, wTEMP
 
 
@@ -199,34 +203,23 @@ def get_waves(ops, device=torch.device("cuda")):
 
 
 def template_centers(ops):
-    shank_idx = ops["kcoords"]
-    xc = ops["xc"]
-    yc = ops["yc"]
+    xmin, xmax, ymin, ymax = (
+        ops["xc"].min(),
+        ops["xc"].max(),
+        ops["yc"].min(),
+        ops["yc"].max(),
+    )
+
     dmin = ops["settings"]["dmin"]
     if dmin is None:
         # Try to determine a good value automatically based on contact positions.
-        y_uniq = np.unique(yc)
-        if y_uniq.size == 1:
-            dmin = 1
-        else:
-            dmin = np.median(np.diff(np.unique(y_uniq)))
+        dmin = np.median(np.diff(np.unique(ops["yc"])))
     ops["dmin"] = dmin
+    ops["yup"] = np.arange(ymin, ymax + 0.00001, dmin / 2)
+
     ops["dminx"] = dminx = ops["settings"]["dminx"]
-
-    # Iteratively determine template placement for each shank separately.
-    yup = np.array([])
-    xup = np.array([])
-    for i in np.unique(shank_idx):
-        xc_i = xc[shank_idx == i]
-        yc_i = yc[shank_idx == i]
-        xmin, xmax, ymin, ymax = xc_i.min(), xc_i.max(), yc_i.min(), yc_i.max()
-
-        yup = np.concatenate([yup, np.arange(ymin, ymax + 0.00001, dmin / 2)])
-        nx = np.round((xmax - xmin) / (dminx / 2)) + 1
-        xup = np.concatenate([xup, np.linspace(xmin, xmax, int(nx))])
-
-    ops["yup"] = yup
-    ops["xup"] = xup
+    nx = np.round((xmax - xmin) / (dminx / 2)) + 1
+    ops["xup"] = np.linspace(xmin, xmax, int(nx))
 
     # Set max channel distance based on dmin, dminx, use whichever is greater.
     if ops.get("max_channel_distance", None) is None:

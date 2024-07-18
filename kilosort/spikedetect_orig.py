@@ -1,16 +1,15 @@
-from io import StringIO
 import logging
+from io import StringIO
 
 logger = logging.getLogger(__name__)
 
-from torch.nn.functional import max_pool2d, avg_pool2d, conv1d, max_pool1d
 import numpy as np
 import torch
+from kilosort.utils import template_path
 from sklearn.cluster import KMeans
 from sklearn.decomposition import TruncatedSVD
+from torch.nn.functional import avg_pool2d, conv1d, max_pool1d, max_pool2d
 from tqdm import tqdm
-
-from kilosort.utils import template_path
 
 device = torch.device("cuda")
 
@@ -47,7 +46,7 @@ def extract_snippets(
 ):
     Xabs = X.abs()
     Xmax = my_max2d(Xabs, loc_range)
-    ispeak = torch.logical_and(Xmax == Xabs, Xabs > Th_single_ch).float()
+    ispeak = torch.logical_and(Xmax == Xabs, Xabs > Th_single_ch[0]).float()
 
     ispeak_sum = my_sum2d(ispeak, long_range)
     is_peak_iso = (ispeak_sum == 1) * (ispeak == 1)
@@ -116,11 +115,7 @@ def template_centers(ops):
     dmin = ops["settings"]["dmin"]
     if dmin is None:
         # Try to determine a good value automatically based on contact positions.
-        y_uniq = np.unique(yc)
-        if y_uniq.size == 1:
-            dmin = 1
-        else:
-            dmin = np.median(np.diff(np.unique(y_uniq)))
+        dmin = np.median(np.diff(np.unique(yc)))
     ops["dmin"] = dmin
     ops["dminx"] = dminx = ops["settings"]["dminx"]
 
@@ -296,8 +291,10 @@ def run(ops, bfile, device=torch.device("cuda"), progress_bar=None):
         xfeat = xsub @ ops["wPCA"].T
         tF[k : k + nsp] = xfeat.transpose(0, 1).cpu().numpy()
 
-        st[k : k + nsp, 0] = (xy[:, 1].cpu().numpy() - nt) / ops["fs"] + ibatch * (
-            ops["batch_size"] / ops["fs"]
+        st[k : k + nsp, 0] = (
+            ((xy[:, 1] - nt) / ops["fs"] + ibatch * (ops["batch_size"] / ops["fs"]))
+            .cpu()
+            .numpy()
         )
         st[k : k + nsp, 1] = yct.cpu().numpy()
         st[k : k + nsp, 2] = amp.cpu().numpy()

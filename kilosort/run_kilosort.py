@@ -1,33 +1,19 @@
 import time
 from pathlib import Path
-import pprint
-import logging
-import warnings
+
 logger = logging.getLogger(__name__)
 
 import numpy as np
 import torch
-
-import kilosort
-from kilosort import (
-    preprocessing,
-    datashift,
-    template_matching,
-    clustering_qr,
-    clustering_qr,
-    io,
-    spikedetect,
-    CCG,
-    PROBE_DIR
-)
+from kilosort import (CCG, PROBE_DIR, clustering_qr, datashift, io,
+                      preprocessing, spikedetect, template_matching)
 from kilosort.parameters import DEFAULT_SETTINGS
 
 
 def run_kilosort(settings, probe=None, probe_name=None, filename=None,
                  data_dir=None, file_object=None, results_dir=None,
                  data_dtype=None, do_CAR=True, invert_sign=False, device=None,
-                 progress_bar=None, save_extra_vars=False,
-                 save_preprocessed_copy=False):
+                 progress_bar=None, save_extra_vars=False):
     """Run full spike sorting pipeline on specified data.
     
     Parameters
@@ -82,10 +68,6 @@ def run_kilosort(settings, probe=None, probe_name=None, filename=None,
         not need to specify this.
     save_extra_vars : bool; default=False.
         If True, save tF and Wall to disk after sorting.
-    save_preprocessed_copy : bool; default=False.
-        If True, save a pre-processed copy of the data (including drift
-        correction) to `temp_wh.dat` in the results directory and format Phy
-        output to use that copy of the data.
     
     Raises
     ------
@@ -95,7 +77,7 @@ def run_kilosort(settings, probe=None, probe_name=None, filename=None,
 
     Returns
     -------
-    ops, st, clu, tF, Wall, similar_templates, is_ref, est_contam_rate, kept_spikes
+    ops, st, clu, tF, Wall, similar_templates, is_ref, est_contam_rate
         Description TODO
 
     """
@@ -112,82 +94,59 @@ def run_kilosort(settings, probe=None, probe_name=None, filename=None,
     filename, data_dir, results_dir, probe = \
         set_files(settings, filename, probe, probe_name, data_dir, results_dir)
     setup_logger(results_dir)
+    logger.info(f"Sorting {filename}")
+    logger.info('-'*40)
 
-    try:
-        logger.info(f"Kilosort version {kilosort.__version__}")
-        logger.info(f"Sorting {filename}")
-        logger.info('-'*40)
-
-        if data_dtype is None:
-            logger.info(
-                "Interpreting binary file as default dtype='int16'. If data was "
-                "saved in a different format, specify `data_dtype`."
-                )
-            data_dtype = 'int16'
-
-        if not do_CAR:
-            logger.info("Skipping common average reference.")
-
-        if device is None:
-            if torch.cuda.is_available():
-                logger.info('Using GPU for PyTorch computations. '
-                            'Specify `device` to change this.')
-                device = torch.device('cuda')
-            else:
-                logger.info('Using CPU for PyTorch computations. '
-                            'Specify `device` to change this.')
-                device = torch.device('cpu')
-
-        if probe['chanMap'].max() >= settings['n_chan_bin']:
-            raise ValueError(
-                f'Largest value of chanMap exceeds channel count of data, '
-                'make sure chanMap is 0-indexed.'
+    if data_dtype is None:
+        logger.info(
+            "Interpreting binary file as default dtype='int16'. If data was "
+            "saved in a different format, specify `data_dtype`."
             )
 
-        tic0 = time.time()
-        ops = initialize_ops(settings, probe, data_dtype, do_CAR, invert_sign,
-                            device, save_preprocessed_copy)
-        # Remove some stuff that doesn't need to be printed twice, then pretty-print
-        # format for log file.
-        ops_copy = ops.copy()
-        _ = ops_copy.pop('settings')
-        _ = ops_copy.pop('probe')
-        print_ops = pprint.pformat(ops_copy, indent=4, sort_dicts=False)
-        logger.debug(f"Initial ops:\n{print_ops}\n")
+    if not do_CAR:
+        logger.info("Skipping common average reference.")
 
+    if device is None:
+        if torch.cuda.is_available():
+            logger.info('Using GPU for PyTorch computations. '
+                        'Specify `device` to change this.')
+            device = torch.device('cuda')
+        else:
+            logger.info('Using CPU for PyTorch computations. '
+                        'Specify `device` to change this.')
+            device = torch.device('cpu')
 
-        # Set preprocessing and drift correction parameters
-        ops = compute_preprocessing(ops, device, tic0=tic0, file_object=file_object)
-        np.random.seed(1)
-        torch.cuda.manual_seed_all(1)
-        torch.random.manual_seed(1)
-        ops, bfile, st0 = compute_drift_correction(
-            ops, device, tic0=tic0, progress_bar=progress_bar,
-            file_object=file_object
-            )
+    if probe['chanMap'].max() >= settings['n_chan_bin']:
+        raise ValueError(
+            f'Largest value of chanMap exceeds channel count of data, '
+             'make sure chanMap is 0-indexed.'
+        )
 
-        # Check scale of data for log file
-        b1 = bfile.padded_batch_to_torch(0).cpu().numpy()
-        logger.debug(f"First batch min, max: {b1.min(), b1.max()}")
+    tic0 = time.time()
+    ops = initialize_ops(settings, probe, data_dtype, do_CAR, invert_sign, device)
 
-        if save_preprocessed_copy:
-            io.save_preprocessing(results_dir / 'temp_wh.dat', ops, bfile)
+    # Set preprocessing and drift correction parameters
+    ops = compute_preprocessing(ops, device, tic0=tic0, file_object=file_object)
+    np.random.seed(1)
+    torch.cuda.manual_seed_all(1)
+    torch.random.manual_seed(1)
+    ops, bfile, st0 = compute_drift_correction(
+        ops, device, tic0=tic0, progress_bar=progress_bar,
+        file_object=file_object
+        )
+    
+    # TODO: don't think we need to do this actually
+    # Save intermediate `ops` for use by GUI plots
+    io.save_ops(ops, results_dir)
 
-        # Sort spikes and save results
-        st,tF, _, _ = detect_spikes(ops, device, bfile, tic0=tic0,
-                                    progress_bar=progress_bar)
-        clu, Wall = cluster_spikes(st, tF, ops, device, bfile, tic0=tic0,
-                                progress_bar=progress_bar)
-        ops, similar_templates, is_ref, est_contam_rate, kept_spikes = \
-            save_sorting(ops, results_dir, st, clu, tF, Wall, bfile.imin, tic0,
-                        save_extra_vars=save_extra_vars,
-                        save_preprocessed_copy=save_preprocessed_copy)
-    except:
-        # This makes sure the full traceback is written to log file.
-        logger.exception('Encountered error in `run_kilosort`:')
-        # Annoyingly, this will print the error message twice for console, but
-        # I haven't found a good way around that.
-        raise
+    # Sort spikes and save results
+    st,tF, _, _ = detect_spikes(ops, device, bfile, tic0=tic0,
+                                 progress_bar=progress_bar)
+    clu, Wall = cluster_spikes(st, tF, ops, device, bfile, tic0=tic0,
+                               progress_bar=progress_bar)
+    ops, similar_templates, is_ref, est_contam_rate, kept_spikes = \
+        save_sorting(ops, results_dir, st, clu, tF, Wall, bfile.imin, tic0,
+                     save_extra_vars=save_extra_vars)
 
     return ops, st, clu, tF, Wall, similar_templates, \
            is_ref, est_contam_rate, kept_spikes
@@ -269,43 +228,19 @@ def setup_logger(results_dir):
     # add the console handler to the root logger
     logging.getLogger('').addHandler(console)
 
-    # Set 3rd party loggers to INFO or above only,
-    # so that it doesn't spam the log file
+    # Set numba logger to INFO or above only, so that it doesn't spam the log file
     numba_log = logging.getLogger('numba')
     numba_log.setLevel(logging.INFO)
 
-    mpl_log = logging.getLogger('matplotlib')
-    mpl_log.setLevel(logging.INFO)
 
-
-def initialize_ops(settings, probe, data_dtype, do_CAR, invert_sign,
-                   device, save_preprocessed_copy) -> dict:
+def initialize_ops(settings, probe, data_dtype, do_CAR, invert_sign, device) -> dict:
     """Package settings and probe information into a single `ops` dictionary."""
 
     if settings['nt0min'] is None:
         settings['nt0min'] = int(20 * settings['nt']/61)
-
-    if settings['nearest_chans'] > len(probe['chanMap']):
-        msg = f"""
-            Parameter `nearest_chans` must be less than or equal to the number 
-            of data channels being sorted.\n
-            Changing from {settings['nearest_chans']} to {len(probe['chanMap'])}.
-            """
-        warnings.warn(msg, UserWarning)
-        settings['nearest_chans'] = len(probe['chanMap'])
-
-    if 'duplicate_spike_bins' in settings:
-        msg = """
-            The `duplicate_spike_bins` parameter has been replaced with 
-            `duplicate_spike_ms`. Specifying the former will have no effect, 
-            since it gets overwritten based on sampling rate.
-            """
-        warnings.warn(msg, DeprecationWarning)
-    dup_bins = int(settings['duplicate_spike_ms'] * (settings['fs']/1000))
-
     # TODO: Clean this up during refactor. Lots of confusing duplication here.
     ops = settings  
-    ops['settings'] = settings
+    ops['settings'] = settings 
     ops['probe'] = probe
     ops['data_dtype'] = data_dtype
     ops['do_CAR'] = do_CAR
@@ -313,9 +248,7 @@ def initialize_ops(settings, probe, data_dtype, do_CAR, invert_sign,
     ops['NTbuff'] = ops['batch_size'] + 2 * ops['nt']
     ops['Nchan'] = len(probe['chanMap'])
     ops['n_chan_bin'] = settings['n_chan_bin']
-    ops['duplicate_spike_bins'] = dup_bins
     ops['torch_device'] = str(device)
-    ops['save_preprocessed_copy'] = save_preprocessed_copy
 
     if not settings['templates_from_data'] and settings['nt'] != 61:
         raise ValueError('If using pre-computed universal templates '
@@ -342,9 +275,7 @@ def get_run_parameters(ops) -> list:
         ops['probe']['yc'],
         ops['settings']['tmin'],
         ops['settings']['tmax'],
-        ops['settings']['artifact_threshold'],
-        ops['settings']['shift'],
-        ops['settings']['scale']
+        ops['settings']['artifact_threshold']
     ]
 
     return parameters
@@ -378,24 +309,18 @@ def compute_preprocessing(ops, device, tic0=np.nan, file_object=None):
     logger.info('-'*40)
 
     n_chan_bin, fs, NT, nt, twav_min, chan_map, dtype, do_CAR, invert, \
-        xc, yc, tmin, tmax, artifact, shift, scale = get_run_parameters(ops)
+        xc, yc, tmin, tmax, artifact = get_run_parameters(ops)
     nskip = ops['settings']['nskip']
     whitening_range = ops['settings']['whitening_range']
     
     # Compute high pass filter
-    cutoff = ops['settings']['highpass_cutoff']
-    hp_filter = preprocessing.get_highpass_filter(fs, cutoff, device=device)
+    hp_filter = preprocessing.get_highpass_filter(ops['settings']['fs'], device=device)
     # Compute whitening matrix
     bfile = io.BinaryFiltered(ops['filename'], n_chan_bin, fs, NT, nt, twav_min,
                               chan_map, hp_filter, device=device, do_CAR=do_CAR,
                               invert_sign=invert, dtype=dtype, tmin=tmin,
                               tmax=tmax, artifact_threshold=artifact,
-                              shift=shift, scale=scale, file_object=file_object)
-
-    logger.info(f'N samples: {bfile.n_samples}')
-    logger.info(f'N seconds: {bfile.n_samples/fs}')
-    logger.info(f'N batches: {bfile.n_batches}')
-
+                              file_object=file_object)
     whiten_mat = preprocessing.get_whitening_matrix(bfile, xc, yc, nskip=nskip,
                                                     nrange=whitening_range)
     if ops['remove_chan_delays']:
@@ -450,14 +375,13 @@ def compute_drift_correction(ops, device, tic0=np.nan, progress_bar=None,
         Wrapped file object for handling data.
     
     """
-
     tic = time.time()
     logger.info(' ')
     logger.info('Computing drift correction.')
     logger.info('-'*40)
 
     n_chan_bin, fs, NT, nt, twav_min, chan_map, dtype, do_CAR, invert, \
-        _, _, tmin, tmax, artifact, shift, scale = get_run_parameters(ops)
+        _, _, tmin, tmax, artifact = get_run_parameters(ops)
     hp_filter = ops['preprocessing']['hp_filter']
     whiten_mat = ops['preprocessing']['whiten_mat']
     chan_delays = ops['preprocessing']['chan_delays']
@@ -466,15 +390,14 @@ def compute_drift_correction(ops, device, tic0=np.nan, progress_bar=None,
         ops['filename'], n_chan_bin, fs, NT, nt, twav_min, chan_map, 
         hp_filter=hp_filter, whiten_mat=whiten_mat, chan_delays=chan_delays, device=device,
         do_CAR=do_CAR, invert_sign=invert, dtype=dtype, tmin=tmin, tmax=tmax,
-        artifact_threshold=artifact, shift=shift, scale=scale,
-        file_object=file_object
+        artifact_threshold=artifact, file_object=file_object
         )
 
     ops, st = datashift.run(ops, bfile, device=device, progress_bar=progress_bar)
     bfile.close()
     logger.info(f'drift computed in {time.time()-tic : .2f}s; ' + 
                 f'total {time.time()-tic0 : .2f}s')
-    if st is not None:
+    if ops['nblocks'] != 0:
         logger.debug(f'st shape: {st.shape}')
         logger.debug(f'yblk shape: {ops["yblk"].shape}')
         logger.debug(f'dshift shape: {ops["dshift"].shape}')
@@ -485,8 +408,7 @@ def compute_drift_correction(ops, device, tic0=np.nan, progress_bar=None,
         ops['filename'], n_chan_bin, fs, NT, nt, twav_min, chan_map, 
         hp_filter=hp_filter, whiten_mat=whiten_mat, chan_delays=chan_delays, device=device,
         dshift=ops['dshift'], do_CAR=do_CAR, dtype=dtype, tmin=tmin, tmax=tmax,
-        artifact_threshold=artifact, shift=shift, scale=scale,
-        file_object=file_object
+        artifact_threshold=artifact, file_object=file_object
         )
 
     return ops, bfile, st
@@ -593,7 +515,7 @@ def cluster_spikes(st, tF, ops, device, bfile, tic0=np.nan, progress_bar=None):
 
 
 def save_sorting(ops, results_dir, st, clu, tF, Wall, imin, tic0=np.nan,
-                 save_extra_vars=False, save_preprocessed_copy=False):  
+                 save_extra_vars=False):  
     """Save sorting results, and format them for use with Phy
 
     Parameters
@@ -616,12 +538,6 @@ def save_sorting(ops, results_dir, st, clu, tF, Wall, imin, tic0=np.nan,
         be shifted forward by this number.
     tic0 : float; default=np.nan.
         Start time of `run_kilosort`.
-    save_extra_vars : bool; default=False.
-        If True, save tF and Wall to disk after sorting.
-    save_preprocessed_copy : bool; default=False.
-        If True, save a pre-processed copy of the data (including drift
-        correction) to `temp_wh.dat` in the results directory and format Phy
-        output to use that copy of the data.
 
     Returns
     -------
@@ -629,7 +545,6 @@ def save_sorting(ops, results_dir, st, clu, tF, Wall, imin, tic0=np.nan,
     similar_templates : np.ndarray
     is_ref : np.ndarray
     est_contam_rate : np.ndarray
-    kept_spikes : np.ndarray
     
     """
 
@@ -639,8 +554,7 @@ def save_sorting(ops, results_dir, st, clu, tF, Wall, imin, tic0=np.nan,
     results_dir, similar_templates, is_ref, est_contam_rate, kept_spikes = \
         io.save_to_phy(
             st, clu, tF, Wall, ops['probe'], ops, imin, results_dir=results_dir,
-            data_dtype=ops['data_dtype'], save_extra_vars=save_extra_vars,
-            save_preprocessed_copy=save_preprocessed_copy
+            data_dtype=ops['data_dtype'], save_extra_vars=save_extra_vars
             )
     logger.info(f'{int(is_ref.sum())} units found with good refractory periods')
     

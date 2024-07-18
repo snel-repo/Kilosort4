@@ -12,8 +12,6 @@ Start by selecting a binary data file (.bin, .bat, .dat, or .raw) to load, by cl
 .. image:: https://www.kilosort.org/static/images/gui_select_binary.png
    :width: 600
 
-Note that binary files should be in row-major (or 'C') order. This is the default for NumPy arrays.
-
 
 Convert from other formats (optional)
 -------------------------------------
@@ -40,7 +38,7 @@ To select a probe, click the drop-down menu just below "Select Probe Layout." Th
 .. image:: https://www.kilosort.org/static/images/gui_select_probe.png
    :width: 600
 
-If you need to create a new probe layout, select "[new]" to open the probe creation tool. Values for 'x-coordinates' and 'y-coordinates' need to be in microns, and can be specified with numpy expressions. For example, a 1-shank linear probe with 4 channels could have `np.ones(4)` in the 'x-coordinates' field instead of `1, 1, 1, 1`. Each field (except name) must have the same number of elements, corresponding to the number of ephys channels in the data. When you are finished setting the values, click "Check" to verify that your inputs are valid. If they are not, an error message will be displayed. Otherwise, the "OK" button will become clickable, which will save the probe to the Kilosort4 probes directory.
+If you need to create a new probe layout, select "[new]" to open the probe creation tool. Values for 'x-coordinates' and 'y-coordinates' need to be in microns, and can be specified with numpy expressions. For example, a 1-shank linear probe with 4 channels could have `np.ones(4)` in the 'x-coordinates' field instead of `1, 1, 1, 1`. Each field (except name) must have the same number of elements, corresponding to the number of ephys channels in the data. WHen you are finished setting the values, click "Check" to verify that your inputs are valid. If they are not, an error message will be displayed. Otherwise, the "OK" button will become clickable, which will save the probe to the Kilosort4 probes directory.
 
 .. image:: https://www.kilosort.org/static/images/gui_make_probe.png
    :width: 600
@@ -64,8 +62,6 @@ After loading the data, a heatmap will appear on the right half of the GUI showi
 
 .. image:: https://www.kilosort.org/static/images/gui_run_sorting.png
    :width: 600
-
-Not pictured: you can now check the "Save Preprocessed Copy" under the "Run" button to save a filtered, whitened, and drift-corrected copy of the data to "temp_wh.dat" in the results directory. This will also reformat the results for Phy so that the preprocessed copy is used instead of the raw binary file.
 
 If you run into errors or the results look strange, you may need to tweak some of the other settings. A handful are shown below 'number of channels' and 'sampling frequency,' or you can click "Extra settings" to open a new window with more options. Mousing over the name of a setting for about half a second will show a description of what the setting does, along with information about which values are allowed. For more detailed suggestions, see :ref:`parameters`
 

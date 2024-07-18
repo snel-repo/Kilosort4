@@ -12,36 +12,26 @@ from kilosort import hierarchical, swarmsplitter
 
 
 def neigh_mat(Xd, nskip=10, n_neigh=30):
-    # Xd is spikes by PCA features in a local neighborhood
-    # finding n_neigh neighbors of each spike to a subset of every nskip spike
-
-    # subsampling the feature matrix 
     Xsub = Xd[::nskip]
-
-    # n_samples is the number of spikes, dim is number of features
     n_samples, dim = Xd.shape
-
-    # n_nodes are the # subsampled spikes
     n_nodes = Xsub.shape[0]
 
-    # search is much faster if array is contiguous
     Xd = np.ascontiguousarray(Xd)
     Xsub = np.ascontiguousarray(Xsub)
-
-    # exact neighbor search ("brute force")
-    # results is dn and kn, kn is n_samples by n_neigh, contains integer indices into Xsub
     index = faiss.IndexFlatL2(dim)   # build the index
     index.add(Xsub)    # add vectors to the index
-    _, kn = index.search(Xd, n_neigh)     # actual search
+    dn, kn = index.search(Xd, n_neigh)     # actual search
 
-    # create sparse matrix version of kn with ones where the neighbors are
-    # M is n_samples by n_nodes
-    dexp = np.ones(kn.shape, np.float32)    
+    #kn = kn[:,1:]
+    n_neigh = kn.shape[-1]
+    dexp = np.ones(kn.shape, np.float32)
+    #M   = csr_matrix((dexp.flatten(), kn.flatten(), n_neigh*np.arange(kn.shape[0]+1)),
+     #              (kn.shape[0], Xsub.shape[0]))
+
     rows = np.tile(np.arange(n_samples)[:, np.newaxis], (1, n_neigh)).flatten()
     M   = csr_matrix((dexp.flatten(), (rows, kn.flatten())),
                    (kn.shape[0], n_nodes))
 
-    # self connections are set to 0!
     M[np.arange(0,n_samples,nskip), np.arange(n_nodes)] = 0
 
     return kn, M
@@ -272,9 +262,9 @@ def x_centers(ops):
         approx_centers = [edges[p] for p in peaks]
 
         # Use these as initial guesses for centroids in k-means to get
-        # a more accurate value for the actual centers. If there's one or none,
+        # a more accurate value for the actual centers. Or, if there's only 1,
         # just look for one centroid.
-        if len(approx_centers) <= 1: approx_centers = 1
+        if len(approx_centers) == 1: approx_centers = 1
 
     centers, distortion = kmeans(ops['xc'], approx_centers, seed=5330)
 
