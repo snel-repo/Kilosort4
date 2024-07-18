@@ -39,6 +39,8 @@ This is the number of time samples used to represent spike waveforms, as well as
 ----------------------
 These adjust the vertical and lateral spacing, respectively, of the universal templates used during spike detection, as well as the vertical and lateral sizes of channel neighborhoods used for clustering. By default, Kilosort will attempt to determine a good value for ``dmin`` based on the median distance between contacts, which tends to work well for Neuropixels-like probes. However, if contacts are irregularly spaced, you may need to specify this manually. The default for ``dminx`` is 32um, which is also well suited to Neuropixels probes. For other probes, try setting ``dminx`` to the median lateral distance between contacts as a starting point.
 
+Note that as of version 4.0.11, the ``kcoords`` variable in the probe layout will be used to restrict template placement within each shank. Each shank should have a unique ``kcoords`` value that is the same for all contacts on that shank.
+
 ``min_template_size``
 ---------------------
 This sets the standard deviation of the smallest Gaussian spatial envelope used to generate universal templates, with a default of 10 microns. You may need to increase this for probes with wider spaces between contacts.
@@ -54,8 +56,8 @@ This is the number of nearest channels and template locations, respectively, use
 The number of x-positions to use when determining centers for template groupings. Specifically, this is the number of centroids to look for when using k-means to cluster the x-positions for the probe. In most cases you should not need to specify this. However, **for probes with contacts arranged in a 2D grid**, we recommend setting ``x_centers`` such that centers are placed every 200-300um so that there are not too many templates in each group. For example, for an array that is 2000um in width, try ``x_centers = 10``. If contacts are very densely spaced, you may need to use a higher value for better performance.
 
 
-``duplicate_spike_bins``
+``duplicate_spike_ms``
 ------------------------
-After sorting has finished, spikes that occur within this number of bins of each other, from the same unit, are assumed to be artifacts and removed. The default of 7 bins corresponds to approximately 0.25ms for a sampling rate of 30000hz. If your sampling rate is different, you may need to increase or decrease this accordingly. If you see otherwise good neurons with large peaks around 0ms when viewing correlograms in Phy, increasing this value can help remove those artifacts.
+After sorting has finished, spikes that occur within this many ms of each other, from the same unit, are assumed to be artifacts and removed. If you see otherwise good neurons with large peaks around 0ms when viewing correlograms in Phy, increasing this value can help remove those artifacts.
 
 **Warning!!!** Do not increase this value beyond 0.5ms as it will interfere with the ACG and CCG refractory period estimations (which normally ignores the central 1ms of the correlogram).
