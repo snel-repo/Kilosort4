@@ -191,7 +191,7 @@ def extract_wPCA_wTEMP(
     wTEMP = wTEMP[wTEMP_order]
     # now normalize the templates
     wTEMP = torch.from_numpy(wTEMP).to(device).float()
-    # wTEMP = wTEMP / (wTEMP**2).sum(1).unsqueeze(1)**.5
+    wTEMP = wTEMP / (wTEMP**2).sum(1).unsqueeze(1) ** 0.5
     return wPCA, wTEMP
 
 
