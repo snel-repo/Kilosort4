@@ -6,13 +6,8 @@ logger = logging.getLogger(__name__)
 import numpy as np
 import torch
 from kilosort.utils import template_path
-from scipy.cluster.hierarchy import fcluster, linkage
-from scipy.signal.windows import tukey
-from scipy.spatial.distance import pdist
-
-# from sklearn.cluster import AgglomerativeClustering, KMeans, SpectralClustering
+from sklearn.cluster import HDBSCAN, KMeans
 from sklearn.decomposition import TruncatedSVD
-from sklearn.mixture import GaussianMixture  # , BayesianGaussianMixture
 from torch.nn.functional import avg_pool2d, conv1d, max_pool1d, max_pool2d
 from tqdm import tqdm
 
@@ -104,6 +99,7 @@ def extract_wPCA_wTEMP(
             twav_min=twav_min,
             Th_single_ch=Th_single_ch,
             device=device,
+            loc_range=[4, 5],
             long_range=[6, nt // 2],
         )
 
@@ -116,82 +112,33 @@ def extract_wPCA_wTEMP(
         i += nnew
 
     clips = clips[:i]
-    clips /= (clips**2).sum(1, keepdims=True) ** 0.5
-    # pass all clips through a tukey window, padded with zeros so the actual tukey is centered
-    # and has 10% of the length of the clip on either side as zeros
-    percent_tukey_coverage = 0.8
-    tukey_window = tukey(
-        np.ceil(clips.shape[1] * percent_tukey_coverage).astype(int), alpha=0.5
-    )
-    zeros_for_padding = np.zeros(clips.shape[1])
-    # place the tukey window in the center of the zeros by slicing and overwriting
-    pad_start = (1 - percent_tukey_coverage) / 2
-    pad_start_idx = int(pad_start * clips.shape[1])
-    pad_end_idx = pad_start_idx + len(tukey_window)
-    zeros_for_padding[pad_start_idx:pad_end_idx] = tukey_window
-    padded_tukey = zeros_for_padding
-    windowed_clips = clips * padded_tukey
+    # clips /= (clips**2).sum(1, keepdims=True) ** 0.5
+    # variance normalize the clips, all by the same amount to keep the relative amplitudes
+    clips /= (clips**2).sum(1, keepdims=True).std() ** 0.5
 
-    print(f"Identified {clips.shape[0]} unique peaks as single channel templates")
-    model = TruncatedSVD(n_components=ops["settings"]["n_pcs"]).fit(windowed_clips)
-    # wPCA = torch.from_numpy(model.components_).to(device).float()
-    wPCA = model.components_
-    # project the clips onto the PCs
-    clips_PCA = (
-        clips @ wPCA.T
-    )  # clips is nclips x nt, and dimensions of wPCA are n_pcs x nt, so clips_PCA is nclips x n_pcs
-    ### now cluster the clips_PCA
+    print(f"Identified {clips.shape[0]} unique waveforms as single channel templates")
+    svd_model_1 = TruncatedSVD(n_components=ops["settings"]["n_pcs"]).fit(clips)
+    wPCA = svd_model_1.components_
+
+    # use HDBSCAN to remove outliers before computing the cluster centers
+    # clips is of shape (n_spikes, n_timepoints)
+    if ops["settings"]["remove_spike_outliers"]:
+        hdbscan = HDBSCAN(min_cluster_size=20).fit_predict(clips)
+        bad_clips = clips[hdbscan < 0]
+        clips = clips[hdbscan >= 0]  # select only the clips that are not outliers
+        print(f"Removed {bad_clips.shape[0]} outlier waveforms with HDBSCAN")
+    else:
+        bad_clips = None
+
+    ### now cluster the clips/projected clips to get the templates
     ## KMeans clustering
-    # model = KMeans(n_clusters=ops['settings']['n_templates'], n_init = 10).fit(clips)
-    # wTEMP = model.cluster_centers_
-    ## Spectral clustering
-    # model = SpectralClustering(n_clusters=ops['settings']['n_templates'], n_init=10).fit(clips)
-    # # get exemplars from the cluster centers
-    # wTEMP = np.zeros((ops['settings']['n_templates'], nt), 'float32')
-    # for i in range(ops['settings']['n_templates']):
-    #     wTEMP[i] = clips[model.labels_ == i].mean(0)
-    ## Gaussian Mixture Model clustering
-    # model = GaussianMixture(n_components=ops['settings']['n_templates'], n_init=10, init_params='kmeans',).fit(clips)
-    # wTEMP = model.means_
-    ## Bayesian Gaussian Mixture Model clustering, allow it to choose the number of components
-    model = GaussianMixture(
-        n_components=ops["settings"]["n_templates"],
-        n_init=10,
-        init_params="kmeans",
-    ).fit(clips_PCA)
-    # wTEMP = model.means_
-    wTEMP = (
-        model.means_ @ wPCA
-    )  # project the cluster centers back to the original space
-    # for each cluster, extract the points that have probabilities above 99%, and we will use those to create a new PCA model later
-    for i in range(ops["settings"]["n_templates"]):
-        cluster_probs = model.predict_proba(clips_PCA)[:, i]
-        cluster_points = clips[cluster_probs > 0.99]
-        if i == 0:
-            cluster_points_all = cluster_points
-        else:
-            cluster_points_all = np.concatenate(
-                (cluster_points_all, cluster_points), axis=0
-            )
-    print(f"Keeping {cluster_points_all.shape[0]} spike examples for PCA")
-    model = TruncatedSVD(n_components=ops["settings"]["n_pcs"]).fit(cluster_points_all)
-    wPCA = torch.from_numpy(model.components_).to(device).float()
-    ## Heirarchical clustering with ward linkage
-    # model = AgglomerativeClustering(n_clusters=ops['settings']['n_templates'], metric='euclidean', linkage='ward').fit(clips)
-    # wTEMP = np.zeros((ops['settings']['n_templates'], nt), 'float32')
-    # for i in range(ops['settings']['n_templates']):
-    #     wTEMP[i] = clips[model.labels_ == i].mean(0)
+    km_model = KMeans(n_clusters=ops["settings"]["n_templates"], n_init=10).fit(clips)
 
-    # Compute linkage matrix
-    Z = linkage(pdist(wTEMP, metric="euclidean"), method="ward")
-    labels = fcluster(Z, t=ops["settings"]["n_templates"], criterion="maxclust")
-    # Reorder the templates based on the linkage matrix,
-    wTEMP_order = np.argsort(labels)
-    # now reorder the templates based on the order
-    wTEMP = wTEMP[wTEMP_order]
-    # now normalize the templates
+    wTEMP = km_model.cluster_centers_
     wTEMP = torch.from_numpy(wTEMP).to(device).float()
+    wPCA = torch.from_numpy(wPCA).to(device).float()
     wTEMP = wTEMP / (wTEMP**2).sum(1).unsqueeze(1) ** 0.5
+    print("Finished extracting templates")
     return wPCA, wTEMP
 
 
@@ -320,16 +267,6 @@ def run(ops, bfile, device=torch.device("cuda"), progress_bar=None):
             nskip=ops["settings"]["nskip"],
             device=device,
         )
-        # plot these to show the templates in different rows using plotly
-        # import plotly.graph_objects as go
-        # import plotly.io as pio
-        # from plotly.subplots import make_subplots
-        # pio.renderers.default = 'browser'
-        # fig = make_subplots(rows=ops['settings']['n_templates'], cols=1, shared_xaxes='all', shared_yaxes='all')
-        # for i in range(ops['settings']['n_templates']):
-        #     fig.add_trace(go.Scatter(y=ops['wTEMP'][i].cpu().numpy(), mode='lines'), row=i+1, col=1)
-        # fig.show()
-        # import pdb; pdb.set_trace()
     else:
         logger.info("Using built-in universal templates.")
         # Use pre-computed templates.

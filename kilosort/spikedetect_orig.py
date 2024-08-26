@@ -3,9 +3,15 @@ from io import StringIO
 
 logger = logging.getLogger(__name__)
 
+from pdb import set_trace
+
 import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+import plotly.io as pio
 import torch
 from kilosort.utils import template_path
+from plotly.subplots import make_subplots
 from sklearn.cluster import KMeans
 from sklearn.decomposition import TruncatedSVD
 from torch.nn.functional import avg_pool2d, conv1d, max_pool1d, max_pool2d
@@ -57,7 +63,6 @@ def extract_snippets(
     xy = is_peak_iso.nonzero()
 
     clips = X[xy[:, :1], xy[:, 1:2] - twav_min + torch.arange(nt, device=device)]
-
     return clips
 
 
@@ -97,7 +102,58 @@ def extract_wPCA_wTEMP(
     model = KMeans(n_clusters=ops["settings"]["n_templates"], n_init=10).fit(clips)
     wTEMP = torch.from_numpy(model.cluster_centers_).to(device).float()
     wTEMP = wTEMP / (wTEMP**2).sum(1).unsqueeze(1) ** 0.5
+    do_plot = False
+    if do_plot:
+        # make KMeans clustering plot
+        # but we must first project the clips into the PCA space
+        # also we need to project the cluster centers into the PCA space
 
+        # define the colors for the clusters
+        n_colors = ops["settings"]["n_templates"]
+        colors = [
+            f"hsl({h}, 50%, 50%)"
+            for h in np.linspace(0, 360, n_colors, endpoint=False).astype(int)
+        ]
+        fig2 = go.Figure()
+        proj_clips = clips @ wPCA.cpu().numpy().T.astype(float)
+        proj_centers = (wTEMP @ wPCA.T).cpu().numpy().astype(float)
+        for i in range(ops["settings"]["n_templates"]):
+            cluster_points = proj_clips[model.labels_ == i]
+            cluster_centers = proj_centers[i]
+            fig2.add_trace(
+                go.Scatter(
+                    x=cluster_points[:, 0],
+                    y=cluster_points[:, 1],
+                    mode="markers",
+                    marker=dict(size=6, color=colors[i]),
+                    name=f"Cluster {i}",
+                )
+            )
+            fig2.add_trace(
+                go.Scatter(
+                    x=[cluster_centers[0]],
+                    y=[cluster_centers[1]],
+                    mode="markers",
+                    marker=dict(size=10, color=colors[i]),
+                    name=f"Cluster {i} center",
+                )
+            )
+        fig2.update_layout(
+            title="Kmeans Clustering in 61D Space of Spikes, Projected into 2D PCA Space",
+            xaxis_title="PCA Component 1",
+            yaxis_title="PCA Component 2",
+        )
+        fig2.show()
+        # use plotly express to plot wTEMP all overlaid on each other
+        # make sure to use the same colors as the clusters
+
+        fig3 = px.line(
+            wTEMP.cpu().numpy().T,
+            color_discrete_sequence=colors,
+            title="Single Channel Templates (Cluster Centers, Kmeans Clustered in 61D Space of Spikes)",
+        )
+        fig3.show()
+        set_trace()
     return wPCA, wTEMP
 
 
@@ -230,9 +286,43 @@ def run(ops, bfile, device=torch.device("cuda"), progress_bar=None):
             nt=ops["nt"],
             twav_min=ops["nt0min"],
             Th_single_ch=ops["settings"]["Th_single_ch"],
-            nskip=25,
+            nskip=ops["settings"]["nskip"],
             device=device,
         )
+        do_plot = False
+        if do_plot:
+            # plot these to show the templates in different rows using plotly
+            # define the colors for the clusters
+            n_colors = ops["settings"]["n_templates"]
+            colors = [
+                f"hsl({h}, 50%, 50%)"
+                for h in np.linspace(0, 360, n_colors, endpoint=False).astype(int)
+            ]
+            print("PLOTTING NOW")
+            pio.renderers.default = "browser"
+            fig = make_subplots(
+                rows=ops["settings"]["n_templates"],
+                cols=1,
+                shared_xaxes="all",
+                shared_yaxes="all",
+            )
+            for i in range(ops["settings"]["n_templates"]):
+                fig.add_trace(
+                    go.Scatter(
+                        y=ops["wTEMP"][i].cpu().numpy(),
+                        mode="lines",
+                        line=dict(color=colors[i]),
+                    ),
+                    row=i + 1,
+                    col=1,
+                )
+            fig.update_layout(
+                title="Single Channel Templates (Cluster Centers, Kmeans Clustered in 61D Space of Spikes)",
+                xaxis_title="Time (samples)",
+                yaxis_title="Amplitude",
+            )
+            fig.show()
+            set_trace()
     else:
         logger.info("Using built-in universal templates.")
         # Use pre-computed templates.

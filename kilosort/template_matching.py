@@ -78,7 +78,8 @@ def align_U(U, ops, device=torch.device('cuda')):
     Uex = torch.einsum('xyz, zt -> xty', U.to(device), ops['wPCA'])
     X = Uex.reshape(-1, ops['Nchan']).T
     X = conv1d(X.unsqueeze(1), ops['wTEMP'].unsqueeze(1), padding=ops['nt']//2)
-    Xmax = X.abs().max(0)[0].max(0)[0].reshape(-1, ops['nt'])
+    # sum over channels to avoid brittleness when two channels have spikes of similar amplitude
+    Xmax = X.abs().sum(0).max(0)[0].reshape(-1, ops['nt'])
     imax = torch.argmax(Xmax, 1)
 
     Unew = Uex.clone() 
