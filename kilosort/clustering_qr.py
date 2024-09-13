@@ -1,37 +1,46 @@
+import faiss
 import numpy as np
 import torch
-from torch import sparse_coo_tensor as coo
-from scipy.sparse import csr_matrix
+from kilosort import hierarchical, swarmsplitter
+from scipy.cluster.vq import kmeans
 from scipy.ndimage import gaussian_filter
 from scipy.signal import find_peaks
-from scipy.cluster.vq import kmeans
-import faiss
-from tqdm import tqdm 
-
-from kilosort import hierarchical, swarmsplitter 
+from scipy.sparse import csr_matrix
+from torch import sparse_coo_tensor as coo
+from tqdm import tqdm
 
 
 def neigh_mat(Xd, nskip=10, n_neigh=30):
-    Xsub = Xd[::nskip]
-    n_samples, dim = Xd.shape
-    n_nodes = Xsub.shape[0]
+    # Xd is spikes by PCA features in a local neighborhood
+    # finding n_neigh neighbors of each spike to a subset of every nskip spike
 
+    # subsampling the feature matrix 
+    Xsub = Xd[::nskip]
+    
+    # n_samples is the number of spikes, dim is number of features
+    n_samples, dim = Xd.shape
+    
+    # n_nodes are the # subsampled spikes
+    n_nodes = Xsub.shape[0]
+    
+    # search is much faster if array is contiguous
     Xd = np.ascontiguousarray(Xd)
     Xsub = np.ascontiguousarray(Xsub)
+    
+    # exact neighbor search ("brute force")
+    # results is dn and kn, kn is n_samples by n_neigh, contains integer indices into Xsub
     index = faiss.IndexFlatL2(dim)   # build the index
     index.add(Xsub)    # add vectors to the index
-    dn, kn = index.search(Xd, n_neigh)     # actual search
+    _, kn = index.search(Xd, n_neigh)     # actual search
 
-    #kn = kn[:,1:]
-    n_neigh = kn.shape[-1]
+    # create sparse matrix version of kn with ones where the neighbors are
+    # M is n_samples by n_nodes
     dexp = np.ones(kn.shape, np.float32)
-    #M   = csr_matrix((dexp.flatten(), kn.flatten(), n_neigh*np.arange(kn.shape[0]+1)),
-     #              (kn.shape[0], Xsub.shape[0]))
-
     rows = np.tile(np.arange(n_samples)[:, np.newaxis], (1, n_neigh)).flatten()
     M   = csr_matrix((dexp.flatten(), (rows, kn.flatten())),
                    (kn.shape[0], n_nodes))
 
+    # self connections are set to 0!
     M[np.arange(0,n_samples,nskip), np.arange(n_nodes)] = 0
 
     return kn, M
@@ -153,6 +162,22 @@ def cluster(Xd, iclust = None, kn = None, nskip = 20, n_neigh = 10, nclust = 200
 def kmeans_plusplus(Xg, niter = 200, seed = 1, device=torch.device('cuda')):
     #Xg = torch.from_numpy(Xd).to(dev)    
     vtot = (Xg**2).sum(1)
+    n1 = vtot.shape[0]
+
+    if n1 > 2**24:
+        # Need to subsample v2, torch.multinomial doesn't allow more than 2**24
+        # elements. We're just using this to sample some spikes, so it's fine to
+        # not use all of them.
+        n2 = n1 - 2**24   # number of spikes to remove before sampling
+        remove = np.round(np.linspace(0, n1-1, n2)).astype(int)
+        idx = np.ones(n1, dtype=bool)
+        idx[remove] = False
+        # Also need to map the indices from the subset back to indices for
+        # the full tensor.
+        rev_idx = idx.nonzero()[0]
+        subsample = True
+    else:
+        subsample = False
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -164,8 +189,11 @@ def kmeans_plusplus(Xg, niter = 200, seed = 1, device=torch.device('cuda')):
 
     iclust = torch.zeros((NN,), dtype = torch.int, device = device)
     for j in range(niter):
-        v2 = torch.relu(vtot - vexp0) 
-        isamp = torch.multinomial(v2, ntry)
+        v2 = torch.relu(vtot - vexp0)
+        if subsample:
+            isamp = rev_idx[torch.multinomial(v2[idx], ntry)]
+        else:
+            isamp = torch.multinomial(v2, ntry)
         
         Xc = Xg[isamp]    
         vexp = 2 * Xg @ Xc.T - (Xc**2).sum(1)

@@ -1,13 +1,22 @@
 import logging
 import time
 from pathlib import Path
+import warnings
 
 logger = logging.getLogger(__name__)
 
 import numpy as np
 import torch
-from kilosort import (CCG, PROBE_DIR, clustering_qr, datashift, io,
-                      preprocessing, spikedetect, template_matching)
+from kilosort import (
+    CCG,
+    PROBE_DIR,
+    clustering_qr,
+    datashift,
+    io,
+    preprocessing,
+    spikedetect,
+    template_matching,
+)
 from kilosort.parameters import DEFAULT_SETTINGS
 
 
@@ -103,6 +112,7 @@ def run_kilosort(settings, probe=None, probe_name=None, filename=None,
             "Interpreting binary file as default dtype='int16'. If data was "
             "saved in a different format, specify `data_dtype`."
             )
+        data_dtype = 'int16'
 
     if not do_CAR:
         logger.info("Skipping common average reference.")
@@ -239,6 +249,16 @@ def initialize_ops(settings, probe, data_dtype, do_CAR, invert_sign, device) -> 
 
     if settings['nt0min'] is None:
         settings['nt0min'] = int(20 * settings['nt']/61)
+    
+    if settings['nearest_chans'] > len(probe['chanMap']):
+        msg = f"""
+            Parameter `nearest_chans` must be less than or equal to the number 
+            of data channels being sorted.\n
+            Changing from {settings['nearest_chans']} to {len(probe['chanMap'])}.
+            """
+        warnings.warn(msg, UserWarning)
+        settings['nearest_chans'] = len(probe['chanMap'])
+
     # TODO: Clean this up during refactor. Lots of confusing duplication here.
     ops = settings  
     ops['settings'] = settings 
@@ -398,7 +418,7 @@ def compute_drift_correction(ops, device, tic0=np.nan, progress_bar=None,
     bfile.close()
     logger.info(f'drift computed in {time.time()-tic : .2f}s; ' + 
                 f'total {time.time()-tic0 : .2f}s')
-    if ops['nblocks'] != 0:
+    if st is not None:
         logger.debug(f'st shape: {st.shape}')
         logger.debug(f'yblk shape: {ops["yblk"].shape}')
         logger.debug(f'dshift shape: {ops["dshift"].shape}')
