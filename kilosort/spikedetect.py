@@ -122,12 +122,15 @@ def extract_wPCA_wTEMP(
 
     # use HDBSCAN to remove outliers before computing the cluster centers
     # clips is of shape (n_spikes, n_timepoints)
-    if ops["settings"]["remove_spike_outliers"]:
+    # skip if there are less than 20 spikes
+    if ops["settings"]["remove_spike_outliers"] and clips.shape[0] >= 20:
         hdbscan = HDBSCAN(min_cluster_size=20).fit_predict(clips)
         bad_clips = clips[hdbscan < 0]
         clips = clips[hdbscan >= 0]  # select only the clips that are not outliers
         print(f"Removed {bad_clips.shape[0]} outlier waveforms with HDBSCAN")
     else:
+        if clips.shape[0] < 20 and ops["settings"]["remove_spike_outliers"]:
+            print("Skipping spike outlier removal with HDBSCAN because there were less than 20 spikes identified")
         bad_clips = None
 
     ### now cluster the clips/projected clips to get the templates
