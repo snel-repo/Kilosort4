@@ -1,7 +1,7 @@
 import logging
 import time
-from pathlib import Path
 import warnings
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -345,10 +345,11 @@ def compute_preprocessing(ops, device, tic0=np.nan, file_object=None):
     whiten_mat = preprocessing.get_whitening_matrix(bfile, xc, yc, nskip=nskip,
                                                     nrange=whitening_range)
     if ops['remove_chan_delays']:
-        chan_delays = preprocessing.get_channel_delays(bfile, fs=fs, nskip=nskip,
+        chan_delays, best_chan = preprocessing.get_channel_delays(bfile, fs=fs, nskip=nskip,
                                                       device=device)
     else:
         chan_delays = torch.zeros(n_chan_bin, dtype=torch.float32, device=device)
+        best_chan = None
 
     bfile.close()
 
@@ -357,6 +358,7 @@ def compute_preprocessing(ops, device, tic0=np.nan, file_object=None):
     ops['preprocessing'] = {}
     ops['preprocessing']['whiten_mat'] = whiten_mat # None to disable
     ops['preprocessing']['chan_delays'] = chan_delays
+    ops['preprocessing']['reference_chan'] = best_chan
     ops['preprocessing']['hp_filter'] = hp_filter
     ops['Wrot'] = ops['preprocessing']['whiten_mat'] # why is this duplicated?
     ops['fwav'] = hp_filter
@@ -365,7 +367,7 @@ def compute_preprocessing(ops, device, tic0=np.nan, file_object=None):
                 f'total {time.time()-tic0 : .2f}s')
     logger.debug(f'hp_filter shape: {hp_filter.shape}')
     logger.debug(f'whiten_mat shape: {whiten_mat.shape}')
-    logger.debug(f'channel_delays shape: {chan_delays.shape}')
+    logger.debug(f'chan_delays shape: {chan_delays.shape}')
 
     return ops
 
@@ -470,6 +472,9 @@ def detect_spikes(ops, device, bfile, tic0=np.nan, progress_bar=None):
     logger.info(f'Extracting spikes using templates')
     logger.info('-'*40)
     st0, tF, ops = spikedetect.run(ops, bfile, device=device, progress_bar=progress_bar)
+    # np.save(f"st0_ntemp_{ops['n_templates']}_npcs_{ops['n_pcs']}_spkTh_{ops['Th_single_ch']}_hdbscan_{ops['remove_spike_outliers']}.npy",st0)
+    # from pdb import set_trace; set_trace()
+    # raise SystemExit
     tF = torch.from_numpy(tF)
     logger.info(f'{len(st0)} spikes extracted in {time.time()-tic : .2f}s; ' + 
                 f'total {time.time()-tic0 : .2f}s')

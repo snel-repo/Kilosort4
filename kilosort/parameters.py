@@ -247,6 +247,18 @@ EXTRA_PARAMETERS = {
             outlier spikes.
             """,
     },
+    "hdbscan_min_cluster_size": {
+        "gui_name": "adjust minimum cluster size for detecting spike outliers",
+        "type": int,
+        "min": None,
+        "max": None,
+        "exclude": [],
+        "default": 20,
+        "step": "preprocessing",
+        "description": """
+            If remove_spike_outliers is True, this sets the minimum number of spikes to be considered a cluster. See the HDBSCAN min_cluster_size parameter in the sklearn documentation for more details.
+            """,
+    },
     ### SPIKE DETECTION
     # NOTE: if left as None, will be set to `int(20 * settings['nt']/61)`
     "nt0min": {

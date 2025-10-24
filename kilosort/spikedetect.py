@@ -4,8 +4,11 @@ from io import StringIO
 logger = logging.getLogger(__name__)
 
 import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
 import torch
 from kilosort.utils import template_path
+from plotly.subplots import make_subplots
 from sklearn.cluster import HDBSCAN, KMeans
 from sklearn.decomposition import TruncatedSVD
 from torch.nn.functional import avg_pool2d, conv1d, max_pool1d, max_pool2d
@@ -122,22 +125,46 @@ def extract_wPCA_wTEMP(
 
     # use HDBSCAN to remove outliers before computing the cluster centers
     # clips is of shape (n_spikes, n_timepoints)
-    # skip if there are less than 20 spikes
-    if ops["settings"]["remove_spike_outliers"] and clips.shape[0] >= 20:
-        hdbscan = HDBSCAN(min_cluster_size=20).fit_predict(clips)
+    # skip if there are less than 20 spikes or less than the specified value in ops["settings"]["hdbscan_min_cluster_size"]
+    min_number_of_spikes = max(20, ops["settings"]["hdbscan_min_cluster_size"])
+    if ops["settings"]["remove_spike_outliers"] and clips.shape[0] >= min_number_of_spikes:
+        hdbscan = HDBSCAN(min_cluster_size=ops["settings"]["hdbscan_min_cluster_size"]).fit_predict(clips)
         bad_clips = clips[hdbscan < 0]
-        clips = clips[hdbscan >= 0]  # select only the clips that are not outliers
+        good_clips = clips[hdbscan >= 0]  # select only the clips that are not outliers
         print(f"Removed {bad_clips.shape[0]} outlier waveforms with HDBSCAN")
     else:
-        if clips.shape[0] < 20 and ops["settings"]["remove_spike_outliers"]:
-            print("Skipping spike outlier removal with HDBSCAN because there were less than 20 spikes identified")
+        if clips.shape[0] < min_number_of_spikes and ops["settings"]["remove_spike_outliers"]:
+            print(f"Skipping spike outlier removal with HDBSCAN because there must be at least {min_number_of_spikes} spikes identified, but there were {clips.shape[0]}. To use outlier removal, try a longer recording or lower Th_single_ch.")
         bad_clips = None
+        good_clips = clips
 
     ### now cluster the clips/projected clips to get the templates
     ## KMeans clustering
-    km_model = KMeans(n_clusters=ops["settings"]["n_templates"], n_init=10).fit(clips)
+    km_model = KMeans(n_clusters=ops["settings"]["n_templates"], n_init=10).fit(good_clips)
+    # km_model2 = KMeans(n_clusters=ops["settings"]["n_templates"], n_init=10).fit(clips)
+    # all_clips_labels = km_model2.predict(clips)
+    # all_clips_points = km_model2.transform(clips)
+    # good_clips_labels = km_model.predict(good_clips)
+    # good_clips_points = km_model2.transform(good_clips)
 
+    # fig = make_subplots(2,2,shared_xaxes='rows',shared_yaxes='rows')
+    # for iClust in np.unique(all_clips_labels):
+    #     fig.add_trace(go.Scatter(x=all_clips_points[all_clips_labels==iClust,0],y=all_clips_points[all_clips_labels==iClust,1],mode='markers',marker=dict(size=10,color=px.colors.qualitative.Prism[iClust],opacity=0.3)),row=1,col=1)
+    #     fig.add_trace(go.Scatter(x=good_clips_points[good_clips_labels==iClust,0],y=good_clips_points[good_clips_labels==iClust,1],mode='markers',marker=dict(size=10,color=px.colors.qualitative.Prism[iClust],opacity=0.3)),row=1,col=2)      
+    #     fig.add_trace(go.Scatter(y=km_model2.cluster_centers_[iClust],mode='lines',line=dict(width=4,color=px.colors.qualitative.Prism[iClust])),row=2,col=1)
+    #     fig.add_trace(go.Scatter(y=km_model.cluster_centers_[iClust],mode='lines',line=dict(width=4,color=px.colors.qualitative.Prism[iClust])),row=2,col=2)
+    # # fig.add_trace(go.Scatter(x=all_clips_points[hdbscan<0],y=all_clips_points[hdbscan<0,1],mode='markers',marker=dict(size=14,color='gray',opacity=1)),row=1,col=2)
+    # fig.update_layout(template='plotly_white')
+    # fig.update_xaxes(range=[0,3],row=1,col=1); fig.update_yaxes(range=[0,3],row=1,col=1)
+    # fig.update_xaxes(range=[0,3],row=1,col=2); fig.update_yaxes(range=[0,3],row=1,col=2)
+    # fig.update_xaxes(range=[0,60],row=2,col=1); fig.update_yaxes(range=[-1/2,1/2],row=2,col=1)
+    # fig.update_xaxes(range=[0,60],row=2,col=2); fig.update_yaxes(range=[-1/2,1/2],row=2,col=2)
+    # fig.show()
     wTEMP = km_model.cluster_centers_
+    # fig.update_layout(width=800,height=800)
+    # fig.write_image('fig_4fg.svg')
+    # from pdb import set_trace
+    # set_trace()
     wTEMP = torch.from_numpy(wTEMP).to(device).float()
     wPCA = torch.from_numpy(wPCA).to(device).float()
     wTEMP = wTEMP / (wTEMP**2).sum(1).unsqueeze(1) ** 0.5
