@@ -349,7 +349,7 @@ def compute_preprocessing(ops, device, tic0=np.nan, file_object=None):
                                                       device=device)
     else:
         chan_delays = torch.zeros(n_chan_bin, dtype=torch.float32, device=device)
-        best_chan = None
+        best_chan = torch.tensor((float('nan')))
 
     bfile.close()
 
