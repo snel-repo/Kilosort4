@@ -4,11 +4,11 @@ from io import StringIO
 logger = logging.getLogger(__name__)
 
 import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
+# import plotly.express as px
+# import plotly.graph_objects as go
 import torch
 from kilosort.utils import template_path
-from plotly.subplots import make_subplots
+# from plotly.subplots import make_subplots
 from sklearn.cluster import HDBSCAN, KMeans
 from sklearn.decomposition import TruncatedSVD
 from torch.nn.functional import avg_pool2d, conv1d, max_pool1d, max_pool2d
